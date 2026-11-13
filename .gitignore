@@ -1,0 +1,17 @@
+common/tests/test_core
+common/tests/dump_fixture
+*.o
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+.cache/
+__pycache__/
+*.pyc
+.gradle/
+local.properties
+*.apk
+*.jks
+*.keystore
+keystore.properties
+.idea/

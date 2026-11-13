@@ -1,0 +1,94 @@
+:root {
+  color-scheme: dark;
+  --bg: #14181c;
+  --panel: #1d242b;
+  --ink: #e7edf2;
+  --muted: #9aabba;
+  --line: #31404c;
+  --accent: #e0a15a;
+  --ok: #8fbf8a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.4 "Segoe UI", sans-serif;
+}
+
+h1, h2 { margin: 0; font-weight: 600; }
+h1 { font-size: 1.4rem; letter-spacing: 0.04em; }
+h2 { font-size: 0.95rem; margin-bottom: 0.4rem; }
+
+.top, .tabs, .layout { padding: 0.8rem 1rem; }
+.top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+}
+.lede, .note, .status { color: var(--muted); margin: 0.2rem 0 0; }
+.status { text-align: right; }
+
+.tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.tabs button, aside button, label input, label select {
+  font: inherit;
+  color: var(--ink);
+  background: #12171b;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.tabs button, aside button { padding: 0.35rem 0.7rem; cursor: pointer; }
+.tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.stream {
+  overflow: auto;
+  max-height: calc(100vh - 8rem);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  white-space: nowrap;
+}
+th { color: var(--muted); font-family: inherit; position: sticky; top: 0; background: #24303a; }
+
+aside { display: flex; flex-direction: column; gap: 0.8rem; }
+aside section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+label { display: flex; flex-direction: column; gap: 0.15rem; color: var(--muted); font-size: 0.85rem; }
+label.check { flex-direction: row; align-items: center; gap: 0.4rem; }
+label input, label select { padding: 0.3rem 0.4rem; }
+.row { display: flex; gap: 0.4rem; }
+#log-list { margin: 0; padding-left: 1.1rem; }
+#log-list a { color: var(--ok); }
+#op-note { min-height: 1.2rem; }
+
+@media (max-width: 800px) {
+  .top { flex-direction: column; }
+  .status { text-align: left; }
+  .layout { grid-template-columns: 1fr; }
+  .stream { max-height: 50vh; }
+}

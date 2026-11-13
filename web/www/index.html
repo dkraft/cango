@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CANGO</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>CANGO</h1>
+    <p class="lede">One CAN bus. The BOOT button selects capture, BLE, or WiFi.</p>
+  </div>
+  <p id="status" class="status">connecting</p>
+</header>
+<nav id="tabs" class="tabs" aria-label="Views"></nav>
+<div class="layout">
+  <section class="stream" aria-label="Live frames">
+    <table>
+      <thead>
+        <tr><th>t µs</th><th>ID</th><th>flags</th><th>data</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+  <aside>
+    <section>
+      <h2>Filter</h2>
+      <p class="note">Applies to this tab only. Capture files ignore view filters. This page does not send a device filter, so two tabs can watch different ids.</p>
+      <label class="check"><input id="filter-active" type="checkbox"> Active</label>
+      <label>ID <input id="filter-id" value="0" inputmode="text" spellcheck="false"></label>
+      <label>Mask <input id="filter-mask" value="7FF" spellcheck="false"></label>
+      <label>ID type
+        <select id="filter-ext">
+          <option value="any">any</option>
+          <option value="std">standard</option>
+          <option value="ext">extended</option>
+        </select>
+      </label>
+      <label class="check"><input id="filter-change" type="checkbox"> Change only</label>
+      <label>Min interval ms <input id="filter-interval" type="number" min="0" value="0"></label>
+      <div class="row">
+        <button id="apply-filter" type="button">Apply</button>
+        <button id="clear-filter" type="button">Clear</button>
+      </div>
+    </section>
+    <section>
+      <h2>Capture</h2>
+      <p class="note">Default profile is dealer. Saving here does not switch the radio. A bus with no tester stays purple until a dealer session is seen and then goes quiet.</p>
+      <label>Profile
+        <select id="profile">
+          <option value="dealer" selected>dealer</option>
+          <option value="startup">startup</option>
+          <option value="both">both</option>
+        </select>
+      </label>
+      <label>Startup max s <input id="startup-max" type="number" min="1" value="60"></label>
+      <label>Startup quiet s <input id="startup-quiet" type="number" min="0" value="3"></label>
+      <label>Dealer quiet s <input id="dealer-quiet" type="number" min="1" value="5"></label>
+      <label>Dealer context s <input id="dealer-context" type="number" min="0" value="5"></label>
+      <label>User events to complete <input id="user-events" type="number" min="0" value="0"></label>
+      <button id="save-capture" type="button">Save profile</button>
+    </section>
+    <section>
+      <h2>Project</h2>
+      <p class="note">A new tab opens Generic. Generic cannot be overwritten or deleted.</p>
+      <label>Applied
+        <select id="project"></select>
+      </label>
+      <div class="row">
+        <button id="apply-project" type="button">Apply</button>
+        <button id="delete-project" type="button">Delete</button>
+      </div>
+      <label>New id <input id="new-id" spellcheck="false" placeholder="bench"></label>
+      <label>Name <input id="new-name" placeholder="Bench"></label>
+      <label>Bitrate <input id="new-bitrate" type="number" value="500000"></label>
+      <label>TX allow <input id="new-allow" spellcheck="false" placeholder="123,7E0"></label>
+      <button id="save-project" type="button">Save project</button>
+    </section>
+    <section>
+      <h2>Logs</h2>
+      <p class="note">Files download over HTTP. BLE does not carry logs. Long-press BOOT until the LED flashes green, then open this page.</p>
+      <ul id="log-list"></ul>
+      <button id="reload-logs" type="button">Refresh</button>
+    </section>
+    <section>
+      <h2>Inject</h2>
+      <p class="note">One bus, listen-only until armed. Arm needs the confirm box, lasts 60 seconds, and an empty allow list rejects every id.</p>
+      <label class="check"><input id="confirm-arm" type="checkbox"> I intend to transmit on this bus</label>
+      <div class="row">
+        <button id="arm" type="button" disabled>Arm</button>
+        <button id="disarm" type="button" disabled>Disarm</button>
+      </div>
+      <label>ID <input id="send-id" value="123" spellcheck="false"></label>
+      <label>Data hex <input id="send-data" value="" spellcheck="false" placeholder="010203"></label>
+      <button id="send-frame" type="button" disabled>Send frame</button>
+    </section>
+    <section>
+      <h2>WiFi</h2>
+      <p class="note">Factory networks are remembered in the board. The access point stays up while station association is tried in order.</p>
+      <label>Slot 0 SSID <input id="wifi0-ssid" spellcheck="false"></label>
+      <label>Slot 0 password <input id="wifi0-pass" spellcheck="false"></label>
+      <label>Slot 1 SSID <input id="wifi1-ssid" spellcheck="false"></label>
+      <label>Slot 1 password <input id="wifi1-pass" spellcheck="false"></label>
+      <button id="save-wifi" type="button">Save WiFi</button>
+    </section>
+    <section id="modules">
+      <h2>Modules</h2>
+      <p class="note">Module finder is not available yet.</p>
+      <button id="find-modules" type="button" disabled>Find modules</button>
+    </section>
+    <section id="actions">
+      <h2>Actions</h2>
+      <p class="note">Push functions are not available yet.</p>
+      <button id="run-action" type="button" disabled>Run action</button>
+    </section>
+    <p id="op-note" class="note"></p>
+  </aside>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
