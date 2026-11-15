@@ -20,9 +20,9 @@ A frame is `t_us u32`, `id u32`, `flags u8`, `len u8`, `data[8]`, `reserved u16`
 
 ## Link
 
-WebSocket path `/ws`. Text frames are JSON. Binary frames are batches. `GET /logs/<folder>/<file>` downloads a log. Each capture is a folder under `/logs` containing `log.cango` and `log.json`. The web files live on the card at `/www`.
+WebSocket path `/ws`. Text frames are JSON. Binary frames are batches. `GET /logs/<folder>/<file>` downloads a log. Each capture is a folder under `/logs` containing `log.cango`, `log.json`, and `log.csv`. The web files live on the card at `/www`.
 
-The page keeps one view filter per tab and does not send `set_filter`. The firmware has a single WiFi filter, so a device-wide filter would starve every tab. BLE does send `set_filter`, because that link cannot carry a busy bus. Capture files ignore both filters.
+The page keeps one view filter per tab and does not send `set_filter`. The firmware has a single WiFi filter, so a device-wide filter would starve every tab. BLE does send `set_filter`, because that link cannot carry a busy bus. Checked ids are notified at most every 200 ms, latest frame per id, for up to 64 ids. Capture files ignore both filters. WiFi mode also accepts one GVRET client on TCP port 23. That socket carries the full bus, not the page filter. A new connection replaces the old one. USB serial stays the log console.
 
 ## Operations
 
@@ -34,7 +34,9 @@ The page keeps one view filter per tab and does not send `set_filter`. The firmw
 
 `set_capture` returns ok and does not change the window. Capture is 30 seconds of every frame when a card is mounted. A short BOOT press in capture mode starts a new folder.
 
-`set_filter` takes `active`, decimal `id` and `mask`, `extended` (`any`, `std`, `ext`), `change_only`, and `min_interval_ms`.
+`set_filter` takes `active`, `extended` (`any`, `std`, `ext`), `change_only`, and `min_interval_ms`. With an `ids` array it also takes `mode` (`all` hides those ids, `only` passes them) and an inclusive range when both `id_from` and `id_to` are present. At most 32 ids. A longer list returns `error` `full` and leaves the previous list. `active` false clears the filter. With no `ids` field, decimal `id` and `mask` still work. The default mask is `0x7ff` when `mask` is omitted.
+
+WiFi mode answers GVRET on port 23. Two `0xE7` bytes enter binary mode. Commands start with `0xF1`. The device reports one bus at the project bitrate. `0x11` means enabled and listen-only. `0x01` means enabled and armed. Command `0x05` is consumed and does not change the bitrate. A frame from SavvyCAN (`0x00`) uses the same arm and allow-list path as `send_frame`. Unarmed, the wrong bus, or an id outside the allow list is discarded. There is no GVRET error reply. `log.csv` uses SavvyCAN's header `Time Stamp,ID,Extended,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8`. Timestamps are microseconds, the id is eight hex digits, Extended is `true` or `false`, and Bus is `0`.
 
 `arm_tx` requires `"confirm": true`. The transceiver leaves listen-only for 60 seconds. `disarm` returns to listen-only. `send_frame` needs an armed bus and an id on the project allow list. `data` is a hex string or a JSON array of bytes. An empty allow list rejects every id.
 

@@ -1,6 +1,7 @@
 #include "cango_batch.h"
 #include "cango_capture.h"
 #include "cango_filter.h"
+#include "cango_gvret.h"
 #include "cango_log.h"
 #include "cango_mode.h"
 #include "cango_project.h"
@@ -175,6 +176,137 @@ static void test_filter(void)
     expect(cango_filter_match(&f, &st, &a), "data match");
     a.data[0] = 0x23;
     expect(!cango_filter_match(&f, &st, &a), "data miss");
+
+    cango_filter_clear(&f);
+    f.active = true;
+    f.mode = CANGO_FILTER_MODE_ALL;
+    f.id_n = 1;
+    f.ids[0] = 0x100;
+    a = fr(1, 0x100, 1);
+    b = fr(2, 0x200, 1);
+    expect(!cango_filter_match(&f, &st, &a), "hide listed");
+    expect(cango_filter_match(&f, &st, &b), "all passes rest");
+    f.mode = CANGO_FILTER_MODE_ONLY;
+    expect(cango_filter_match(&f, &st, &a), "only listed");
+    expect(!cango_filter_match(&f, &st, &b), "only misses");
+    f.has_range = true;
+    f.id_from = 0x300;
+    f.id_to = 0x310;
+    b = fr(3, 0x305, 1);
+    expect(cango_filter_match(&f, &st, &b), "range inclusive");
+    b = fr(4, 0x311, 1);
+    expect(!cango_filter_match(&f, &st, &b), "range end");
+    f.active = false;
+    expect(cango_filter_match(&f, &st, &b), "inactive passes");
+}
+
+static int g_tx_n;
+static cango_frame_t g_tx_frame;
+
+static bool allow_all(uint32_t id, void *ctx)
+{
+    (void)id;
+    (void)ctx;
+    return true;
+}
+
+static bool allow_none(uint32_t id, void *ctx)
+{
+    (void)id;
+    (void)ctx;
+    return false;
+}
+
+static bool tx_capture(const cango_frame_t *frame, void *ctx)
+{
+    (void)ctx;
+    g_tx_n++;
+    g_tx_frame = *frame;
+    return true;
+}
+
+static void test_gvret(void)
+{
+    cango_gvret_link_t link;
+    uint8_t out[128];
+    uint8_t hello[] = {0xE7, 0xE7, 0xF1, 0x06, 0xF1, 0x0C, 0xF1, 0x01};
+    uint8_t info[] = {0xF1, 0x07};
+    uint8_t alive[] = {0xF1, 0x09};
+    uint8_t ext[] = {0xF1, 0x0D};
+    uint8_t setup[] = {0xF1, 0x05, 0x20, 0xA1, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t send[] = {0xF1, 0x00, 0x23, 0x01, 0x00, 0x00, 0x00, 0x01, 0x11, 0x00};
+    uint8_t send_bus[] = {0xF1, 0x00, 0x23, 0x01, 0x00, 0x00, 0x01, 0x01, 0x11, 0x00};
+    uint8_t send_ext[] = {0xF1, 0x00, 0x23, 0x01, 0x00, 0x80, 0x00, 0x01, 0x22, 0x00};
+    cango_frame_t known;
+    uint8_t enc[32];
+    int n;
+    int el;
+
+    cango_gvret_init(&link);
+    n = cango_gvret_feed(&link, hello, (int)sizeof(hello), 1000, 500000, true, false, allow_all, NULL, tx_capture, NULL, out,
+                         (int)sizeof(out));
+    expect(n == 12 + 3 + 6, "handshake len");
+    expect(out[0] == 0xF1 && out[1] == 0x06 && out[2] == 0x11, "listen flags");
+    expect(out[3] == 0x20 && out[4] == 0xA1 && out[5] == 0x07 && out[6] == 0x00, "500k");
+    expect(out[7] == 0 && out[11] == 0, "second bus off");
+    expect(out[12] == 0xF1 && out[13] == 0x0C && out[14] == 0x01, "one bus");
+    expect(out[15] == 0xF1 && out[16] == 0x01 && out[17] == 0xE8 && out[18] == 0x03, "time 1000");
+
+    n = cango_gvret_feed(&link, info, (int)sizeof(info), 1000, 500000, true, false, allow_all, NULL, tx_capture, NULL, out,
+                         (int)sizeof(out));
+    expect(n == 8 && out[0] == 0xF1 && out[1] == 0x07 && out[2] == 0x01 && out[3] == 0x00, "device info");
+    n = cango_gvret_feed(&link, alive, 2, 1000, 500000, true, false, allow_all, NULL, tx_capture, NULL, out, (int)sizeof(out));
+    expect(n == 2 && out[0] == 0xF1 && out[1] == 0x09, "keepalive");
+    n = cango_gvret_feed(&link, ext, 2, 1000, 500000, true, false, allow_all, NULL, tx_capture, NULL, out, (int)sizeof(out));
+    expect(n == 17 && out[0] == 0xF1 && out[1] == 0x0D && out[16] == 0, "ext buses");
+
+    n = cango_gvret_feed(&link, setup, (int)sizeof(setup), 1000, 250000, false, true, allow_all, NULL, tx_capture, NULL, out,
+                         (int)sizeof(out));
+    expect(n == 0, "set bitrate no reply");
+    n = cango_gvret_feed(&link, alive, 2, 5, 250000, false, true, allow_all, NULL, tx_capture, NULL, out, (int)sizeof(out));
+    expect(n == 2 && out[1] == 0x09, "parser stayed in sync");
+
+    known = fr(1000, 0x123, 0xAB);
+    known.len = 2;
+    known.data[1] = 0xCD;
+    el = cango_gvret_encode_frame(enc, (int)sizeof(enc), &known);
+    expect(el == 14, "frame len");
+    expect(enc[0] == 0xF1 && enc[1] == 0x00, "frame cmd");
+    expect(enc[2] == 0xE8 && enc[3] == 0x03 && enc[4] == 0 && enc[5] == 0, "frame time");
+    expect(enc[6] == 0x23 && enc[7] == 0x01 && enc[8] == 0 && enc[9] == 0, "frame id");
+    expect(enc[10] == 0x02 && enc[11] == 0xAB && enc[12] == 0xCD && enc[13] == 0x00, "frame data");
+
+    g_tx_n = 0;
+    link.tx_calls = 0;
+    n = cango_gvret_feed(&link, send, (int)sizeof(send), 5, 500000, true, false, allow_all, NULL, tx_capture, NULL, out,
+                         (int)sizeof(out));
+    expect(n == 0 && g_tx_n == 0 && link.tx_calls == 0 && link.tx_blocked == 1, "disarmed no tx");
+
+    g_tx_n = 0;
+    link.tx_calls = 0;
+    link.tx_blocked = 0;
+    n = cango_gvret_feed(&link, send, (int)sizeof(send), 5, 500000, false, true, allow_none, NULL, tx_capture, NULL, out,
+                         (int)sizeof(out));
+    expect(g_tx_n == 0 && link.tx_calls == 0 && link.tx_blocked == 1, "allow rejects");
+
+    g_tx_n = 0;
+    memset(&g_tx_frame, 0, sizeof(g_tx_frame));
+    n = cango_gvret_feed(&link, send, (int)sizeof(send), 5, 500000, false, true, allow_all, NULL, tx_capture, NULL, out,
+                         (int)sizeof(out));
+    expect(g_tx_n == 1 && g_tx_frame.id == 0x123 && g_tx_frame.len == 1 && g_tx_frame.data[0] == 0x11, "armed tx");
+    expect((g_tx_frame.flags & CANGO_F_TX) != 0 && (g_tx_frame.flags & CANGO_F_EXT) == 0, "tx flag");
+
+    g_tx_n = 0;
+    n = cango_gvret_feed(&link, send_bus, (int)sizeof(send_bus), 5, 500000, false, true, allow_all, NULL, tx_capture, NULL,
+                         out, (int)sizeof(out));
+    expect(g_tx_n == 0, "wrong bus");
+
+    g_tx_n = 0;
+    memset(&g_tx_frame, 0, sizeof(g_tx_frame));
+    n = cango_gvret_feed(&link, send_ext, (int)sizeof(send_ext), 5, 500000, false, true, allow_all, NULL, tx_capture, NULL,
+                         out, (int)sizeof(out));
+    expect(g_tx_n == 1 && g_tx_frame.id == 0x123 && (g_tx_frame.flags & CANGO_F_EXT) != 0, "ext id");
+    (void)n;
 }
 
 /* ---- batch ---- */
@@ -369,6 +501,7 @@ int main(void)
     test_log();
     test_mode();
     test_filter();
+    test_gvret();
     test_batch();
     test_dealer();
     test_startup();

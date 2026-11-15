@@ -13,6 +13,7 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -24,6 +25,7 @@ static const char *TAG = "ctrl";
 
 static cango_debounce_t s_btn;
 static FILE *s_fp;
+static FILE *s_csv;
 static cango_log_t *s_log;
 static char s_dir[96];
 static cango_census_t s_census;
@@ -52,8 +54,47 @@ static void queue_cmd(uint8_t cmd)
     }
 }
 
+static void csv_close(void)
+{
+    if (s_csv != NULL) {
+        fclose(s_csv);
+        s_csv = NULL;
+    }
+}
+
+static void csv_open(void)
+{
+    char path[128];
+    csv_close();
+    if (s_dir[0] == 0) {
+        return;
+    }
+    snprintf(path, sizeof(path), "%s/log.csv", s_dir);
+    s_csv = fopen(path, "w");
+    if (s_csv != NULL) {
+        fputs("Time Stamp,ID,Extended,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8\n", s_csv);
+    }
+}
+
+static void csv_frame(const cango_frame_t *frame)
+{
+    uint8_t i;
+    uint8_t n;
+    if (s_csv == NULL || frame == NULL) {
+        return;
+    }
+    n = frame->len > 8 ? 8 : frame->len;
+    fprintf(s_csv, "%" PRIu32 ",%08" PRIX32 ",%s,0,%u", frame->t_us, frame->id & 0x1fffffffu,
+            (frame->flags & CANGO_F_EXT) != 0 ? "true" : "false", (unsigned)n);
+    for (i = 0; i < 8; i++) {
+        fprintf(s_csv, ",%02X", i < n ? frame->data[i] : 0);
+    }
+    fputs(",\n", s_csv);
+}
+
 static void capture_close(bool done)
 {
+    csv_close();
     if (s_log != NULL) {
         char json[2048];
         char path[128];
@@ -105,6 +146,7 @@ static void capture_begin(uint32_t now_us)
     }
     s_end_us = now_us + CAPTURE_WINDOW_US;
     s_running = true;
+    csv_open();
     ESP_LOGI(TAG, "log %s for 30s", s_dir);
 }
 
@@ -223,6 +265,7 @@ static void log_task(void *arg)
         if (frames != NULL && xQueueReceive(frames, &frame, pdMS_TO_TICKS(20)) == pdTRUE) {
             if (g_app.mode == CANGO_MODE_CAPTURE && s_running && s_log != NULL) {
                 cango_log_frame(s_log, &frame);
+                csv_frame(&frame);
                 cango_census_add(&s_census, &frame);
             } else if (g_app.mode != CANGO_MODE_CAPTURE) {
                 session_offer_frame(&frame);

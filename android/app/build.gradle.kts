@@ -18,8 +18,8 @@ android {
         applicationId = "app.cango"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 8
+        versionName = "0.1.7"
     }
     signingConfigs {
         if (keystorePropertiesFile.exists()) {

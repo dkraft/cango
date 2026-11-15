@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from cango_codec import decode_batch, encode_batch, encode_log, format_log, pack_frame
+from cango_codec import decode_batch, encode_batch, encode_log, format_gvret_csv, format_log, pack_frame
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -52,6 +52,17 @@ def check_core():
     for needle in ("profile=dealer", "project=generic", "id=7E0", "data=021001", "name=dealer_begin", "USER t_us=1500", "GAP missed=2"):
         if needle not in text:
             return fail("missing " + needle)
+    csv_path = Path("/tmp/cango-sample.csv")
+    cango_path = Path("/tmp/cango-sample.cango")
+    cango_path.write_bytes(log)
+    subprocess.run([sys.executable, str(ROOT / "tools" / "cango_convert.py"), str(cango_path), "--csv", str(csv_path)], check=True)
+    csv_lines = csv_path.read_text().splitlines()
+    if csv_lines[0] != "Time Stamp,ID,Extended,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8":
+        return fail("csv header %s" % csv_lines[0])
+    if not csv_lines[1].startswith("1000,000007E0,false,0,3,02,10,01,00,00,00,00,00,"):
+        return fail("csv row %s" % csv_lines[1])
+    if format_gvret_csv(log) != csv_path.read_text():
+        return fail("csv converter drift")
     ble = (ROOT / "firmware" / "main" / "ble_mode.c").read_text()
     kotlin = (ROOT / "android" / "app" / "src" / "main" / "java" / "app" / "cango" / "Codec.kt").read_text()
     uuids = {

@@ -398,6 +398,7 @@ void wifi_mode_start(void)
     if (g_app.sta_n > 0) {
         scan_and_pick();
     }
+    gvret_start();
     ESP_LOGI(TAG, "ap %s", g_app.ap_ssid);
 }
 
@@ -406,6 +407,7 @@ void wifi_mode_stop(void)
     if (!s_up) {
         return;
     }
+    gvret_stop();
     s_up = false;
     g_app.sta_up = false;
     if (s_httpd != NULL) {

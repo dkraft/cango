@@ -8,46 +8,27 @@
 </head>
 <body>
 <header class="top">
-  <div>
+  <div class="brand">
     <h1>CANGO</h1>
-    <p class="lede">One CAN bus. The BOOT button selects capture, BLE, or WiFi.</p>
+    <button id="help" type="button" aria-label="Help">?</button>
   </div>
   <p id="status" class="status">connecting</p>
 </header>
 <nav id="tabs" class="tabs" aria-label="Views"></nav>
 <div class="layout">
   <section class="stream" aria-label="Live frames">
-    <table>
-      <thead>
-        <tr><th>t µs</th><th>ID</th><th>flags</th><th>data</th></tr>
-      </thead>
+    <div class="tools">
+      <button id="funnel" type="button" aria-label="Filter">▾</button>
+      <button id="notch" type="button" aria-label="Notch">⌐</button>
+      <button id="hold" type="button" aria-label="Hold">○</button>
+    </div>
+    <table id="sniff">
       <tbody id="rows"></tbody>
     </table>
   </section>
   <aside>
     <section>
-      <h2>Filter</h2>
-      <p class="note">Applies to this tab only. Capture files ignore view filters. This page does not send a device filter, so two tabs can watch different ids.</p>
-      <label class="check"><input id="filter-active" type="checkbox"> Active</label>
-      <label>ID <input id="filter-id" value="0" inputmode="text" spellcheck="false"></label>
-      <label>Mask <input id="filter-mask" value="7FF" spellcheck="false"></label>
-      <label>ID type
-        <select id="filter-ext">
-          <option value="any">any</option>
-          <option value="std">standard</option>
-          <option value="ext">extended</option>
-        </select>
-      </label>
-      <label class="check"><input id="filter-change" type="checkbox"> Change only</label>
-      <label>Min interval ms <input id="filter-interval" type="number" min="0" value="0"></label>
-      <div class="row">
-        <button id="apply-filter" type="button">Apply</button>
-        <button id="clear-filter" type="button">Clear</button>
-      </div>
-    </section>
-    <section>
       <h2>Project</h2>
-      <p class="note">A new tab opens Generic. Generic cannot be overwritten or deleted.</p>
       <label>Applied
         <select id="project"></select>
       </label>
@@ -55,33 +36,30 @@
         <button id="apply-project" type="button">Apply</button>
         <button id="delete-project" type="button">Delete</button>
       </div>
-      <label>New id <input id="new-id" spellcheck="false" placeholder="bench"></label>
-      <label>Name <input id="new-name" placeholder="Bench"></label>
+      <label>New id <input id="new-id" spellcheck="false"></label>
+      <label>Name <input id="new-name"></label>
       <label>Bitrate <input id="new-bitrate" type="number" value="500000"></label>
-      <label>TX allow <input id="new-allow" spellcheck="false" placeholder="123,7E0"></label>
+      <label>TX allow <input id="new-allow" spellcheck="false"></label>
       <button id="save-project" type="button">Save project</button>
     </section>
     <section>
       <h2>Logs</h2>
-      <p class="note">An SD card logs 30 seconds when capture mode starts. A short BOOT press starts another 30 seconds in a new folder. Purple flashes while the file is open, then stays solid. Long-press until green, then open this page.</p>
       <ul id="log-list"></ul>
       <button id="reload-logs" type="button">Refresh</button>
     </section>
     <section>
       <h2>Inject</h2>
-      <p class="note">One bus, listen-only until armed. Arm needs the confirm box, lasts 60 seconds, and an empty allow list rejects every id.</p>
       <label class="check"><input id="confirm-arm" type="checkbox"> I intend to transmit on this bus</label>
       <div class="row">
         <button id="arm" type="button" disabled>Arm</button>
         <button id="disarm" type="button" disabled>Disarm</button>
       </div>
       <label>ID <input id="send-id" value="123" spellcheck="false"></label>
-      <label>Data hex <input id="send-data" value="" spellcheck="false" placeholder="010203"></label>
+      <label>Data hex <input id="send-data" value="" spellcheck="false"></label>
       <button id="send-frame" type="button" disabled>Send frame</button>
     </section>
     <section>
       <h2>WiFi</h2>
-      <p class="note">Factory networks are remembered in the board. The access point stays up while station association is tried in order.</p>
       <label>Slot 0 SSID <input id="wifi0-ssid" spellcheck="false"></label>
       <label>Slot 0 password <input id="wifi0-pass" spellcheck="false"></label>
       <label>Slot 1 SSID <input id="wifi1-ssid" spellcheck="false"></label>
@@ -90,7 +68,6 @@
     </section>
     <section id="modules">
       <h2>Modules</h2>
-      <p class="note">Module finder is not available yet.</p>
       <button id="find-modules" type="button" disabled>Find modules</button>
     </section>
     <p id="op-note" class="note"></p>
@@ -101,6 +78,26 @@
   <p>Vehicle</p>
   <button id="pick-zero-xb" type="button">Zero XB</button>
   <button id="close-vehicle" type="button">Close</button>
+</dialog>
+<dialog id="funnel-sheet">
+  <div class="row">
+    <button id="filter-all" type="button">All</button>
+    <button id="filter-none" type="button">None</button>
+  </div>
+  <div class="row">
+    <input id="filter-id" spellcheck="false" inputmode="text">
+    <input id="filter-to" spellcheck="false" inputmode="text">
+    <button id="filter-add" type="button">+</button>
+  </div>
+  <div id="filter-chips"></div>
+  <button id="funnel-close" type="button">Close</button>
+</dialog>
+<dialog id="help-sheet">
+  <p>Row — one id, newest bytes</p>
+  <p>Check — hide that id here</p>
+  <p>Notch — freeze moving bits</p>
+  <p>Hold — keep quiet ids</p>
+  <button id="help-close" type="button">Close</button>
 </dialog>
 <script src="app.js"></script>
 </body>

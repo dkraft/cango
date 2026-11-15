@@ -5,15 +5,18 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -41,7 +44,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -49,7 +51,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.cango.BleSession
-import app.cango.CanFrame
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
@@ -57,7 +58,7 @@ import org.json.JSONObject
 const val CangoGrey: Int = 0xFF151A1E.toInt()
 
 @Composable
-private fun fieldColors() = OutlinedTextFieldDefaults.colors(
+internal fun fieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = Color.White,
     unfocusedTextColor = Color.White,
     disabledTextColor = Color.White,
@@ -95,11 +96,12 @@ private val LedPurple = Color(0xFFC45CFF)
 
 /** Capture, BLE, and WiFi, in the same colors as the board LED. */
 @Composable
-private fun LedStatus(mode: String, capture: String) {
+private fun LedStatus(mode: String, capture: String, linked: Boolean) {
     val logging = mode == "capture" && capture == "running"
+    val bleWait = mode == "ble" && !linked
     var on by remember { mutableStateOf(true) }
-    LaunchedEffect(logging) {
-        if (!logging) {
+    LaunchedEffect(logging || bleWait) {
+        if (!logging && !bleWait) {
             on = true
             return@LaunchedEffect
         }
@@ -113,13 +115,17 @@ private fun LedStatus(mode: String, capture: String) {
         logging && !on -> LedOff
         else -> LedPurple
     }
+    val bleColor = when {
+        mode != "ble" -> LedOff
+        linked -> LedBlue
+        on -> LedBlue
+        else -> LedOff
+    }
     Row(
-        Modifier.fillMaxWidth().padding(bottom = 8.dp),
-        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Glyph("Capture", captureColor) { dealerGlyph(it) }
-        Glyph("BLE", if (mode == "ble") LedBlue else LedOff) { bleGlyph(it) }
+        Glyph("BLE", bleColor) { bleGlyph(it) }
         Glyph("WiFi", if (mode == "wifi") LedGreen else LedOff) { wifiGlyph(it) }
     }
 }
@@ -175,6 +181,27 @@ private fun DrawScope.bleGlyph(color: Color) {
     line(Offset(left, lower), Offset(right, upper))
 }
 
+private fun jsonEscape(text: String): String = text.replace("\\", "\\\\").replace("\"", "\\\"")
+
+@Composable
+private fun ConfigMark(open: Boolean, onClick: () -> Unit) {
+    Canvas(
+        Modifier
+            .size(40.dp)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Config" },
+    ) {
+        val color = if (open) Color.White else Color(0xFF8E98A0)
+        val s = size.minDimension
+        val left = s * 0.18f
+        val right = s * 0.82f
+        val stroke = s * 0.08f
+        listOf(0.30f, 0.50f, 0.70f).forEach { y ->
+            drawLine(color, Offset(left, s * y), Offset(right, s * y), stroke, StrokeCap.Round)
+        }
+    }
+}
+
 private fun DrawScope.wifiGlyph(color: Color) {
     val s = size.minDimension
     val stroke = s * 0.09f
@@ -212,26 +239,38 @@ fun CangoApp() {
     val context = LocalContext.current
     var mode by remember { mutableStateOf("") }
     var capture by remember { mutableStateOf("idle") }
+    var linked by remember { mutableStateOf(false) }
+    var heard by remember { mutableStateOf(0L) }
     var project by remember { mutableStateOf("generic") }
+    var ssid0 by remember { mutableStateOf("") }
+    var pass0 by remember { mutableStateOf("") }
+    var ssid1 by remember { mutableStateOf("") }
+    var pass1 by remember { mutableStateOf("") }
     var picker by remember { mutableStateOf(false) }
     var armed by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
     var screen by remember { mutableIntStateOf(0) }
-    var filterId by remember { mutableStateOf("100") }
-    var filterMask by remember { mutableStateOf("7FF") }
+    var menu by remember { mutableStateOf(false) }
+    var help by remember { mutableStateOf(false) }
     var sendId by remember { mutableStateOf("123") }
     var sendData by remember { mutableStateOf("") }
-    val frames = remember { mutableStateListOf<CanFrame>() }
+    val sniff = remember { SniffModel() }
     val session = remember {
         BleSession(
             context.applicationContext,
             onStatus = { text ->
-                if (text == "ready" || text == "connected") mode = "ble"
+                when {
+                    text == "ready" || text == "connected" -> {
+                        mode = "ble"
+                        linked = true
+                        heard = System.currentTimeMillis()
+                    }
+                    text.startsWith("disconnected") || text.startsWith("discover failed") || text == "service missing" -> {
+                        linked = false
+                    }
+                }
             },
-            onFrames = { batch ->
-                frames.addAll(batch)
-                while (frames.size > 80) frames.removeAt(0)
-            },
+            onFrames = { batch -> sniff.ingest(batch) },
             onJson = { line ->
                 val obj = JSONObject(line)
                 if (obj.optString("op") == "bus_status") {
@@ -240,6 +279,25 @@ fun CangoApp() {
                     capture = obj.optString("capture", capture)
                     val reported = obj.optString("mode")
                     if (reported.isNotEmpty()) mode = reported
+                    heard = System.currentTimeMillis()
+                    linked = true
+                } else if (obj.optString("op") == "get_wifi") {
+                    val entries = obj.optJSONArray("entries")
+                    if (entries != null) {
+                        for (i in 0 until entries.length()) {
+                            val entry = entries.getJSONObject(i)
+                            when (entry.optInt("slot")) {
+                                0 -> {
+                                    ssid0 = entry.optString("ssid")
+                                    pass0 = entry.optString("password")
+                                }
+                                1 -> {
+                                    ssid1 = entry.optString("ssid")
+                                    pass1 = entry.optString("password")
+                                }
+                            }
+                        }
+                    }
                 } else if (obj.optString("op") == "arm_tx" && obj.optBoolean("ok")) {
                     armed = true
                 } else if (obj.optString("op") == "disarm") {
@@ -251,37 +309,47 @@ fun CangoApp() {
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (granted.values.all { it }) session.startScan()
     }
+    LaunchedEffect(linked) {
+        if (!linked) return@LaunchedEffect
+        while (true) {
+            delay(1000)
+            if (System.currentTimeMillis() - heard > 3000) {
+                linked = false
+                return@LaunchedEffect
+            }
+        }
+    }
+    LaunchedEffect(menu, linked) {
+        if (menu && linked) session.send("""{"op":"get_wifi"}""")
+    }
+    LaunchedEffect(linked, sniff.rev) {
+        if (linked) session.send(sniff.json())
+    }
     MaterialTheme(colorScheme = CangoScheme) {
     Surface(Modifier.fillMaxSize(), color = CangoScheme.background, contentColor = Color.White) {
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp).padding(bottom = 72.dp)) {
-        LedStatus(mode, capture)
-        Row {
-            WhiteButton(onClick = {
-                val needed = if (Build.VERSION.SDK_INT >= 31) {
-                    arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-                } else {
-                    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-                }
-                permission.launch(needed)
-            }) { Text("Scan", color = Color.White) }
-            WhiteButton(onClick = { screen = 0 }) { Text("Live", color = Color.White) }
-            WhiteButton(onClick = { screen = 1 }) { Text("Inject", color = Color.White) }
-            WhiteButton(onClick = { screen = 2 }) { Text("Logs", color = Color.White) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            ConfigMark(open = menu, onClick = { menu = !menu })
+            Text(
+                "?",
+                color = if (help) Color.White else Color(0xFF8E98A0),
+                modifier = Modifier
+                    .clickable { help = !help }
+                    .padding(8.dp)
+                    .semantics { contentDescription = "Help" },
+            )
+            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.weight(1f))
+            LedStatus(mode, capture, linked)
         }
-        when (screen) {
-            0 -> {
-                OutlinedTextField(filterId, { filterId = it }, label = { Text("ID hex", color = Color.White) }, colors = fieldColors())
-                OutlinedTextField(filterMask, { filterMask = it }, label = { Text("Mask hex", color = Color.White) }, colors = fieldColors())
-                WhiteButton(onClick = {
-                    val id = filterId.toIntOrNull(16) ?: return@WhiteButton
-                    val mask = filterMask.toIntOrNull(16) ?: return@WhiteButton
-                    session.send("""{"op":"set_filter","active":true,"id":$id,"mask":$mask,"extended":"any"}""")
-                }) { Text("Apply filter", color = Color.White) }
-                frames.takeLast(12).forEach { frame ->
-                    Text("%X  %s".format(frame.id, frame.data.joinToString("") { "%02X".format(it) }), color = Color.White)
-                }
-            }
+        Row {
+            WhiteButton(onClick = { menu = false; screen = 0 }) { Text("Live", color = Color.White) }
+            WhiteButton(onClick = { menu = false; screen = 1 }) { Text("Inject", color = Color.White) }
+            WhiteButton(onClick = { menu = false; screen = 2 }) { Text("Logs", color = Color.White) }
+        }
+        when (if (menu) 3 else screen) {
+            0 -> SniffView(sniff)
             1 -> {
                 Row {
                     Checkbox(confirm, { confirm = it })
@@ -296,14 +364,30 @@ fun CangoApp() {
                     val data = sendData.filter { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
                     session.send("""{"op":"send_frame","id":$id,"data":"$data"}""")
                 }) { Text("Send frame", color = Color.White) }
-                Text("Empty allow list rejects every id. Arm lasts 60 seconds.", color = Color.White)
             }
-            else -> {
-                Text("A short BOOT press in capture mode records 30 seconds in a new folder. Purple flashes while it writes, then stays solid. Long-press until green to download over WiFi.", color = Color.White)
+            2 -> {
                 WhiteButton(onClick = { session.send("""{"op":"list_logs"}""") }) { Text("List names", color = Color.White) }
             }
+            3 -> {
+                WhiteButton(onClick = {
+                    val needed = if (Build.VERSION.SDK_INT >= 31) {
+                        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+                    } else {
+                        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+                    }
+                    permission.launch(needed)
+                }) { Text("Scan", color = Color.White) }
+                OutlinedTextField(ssid0, { ssid0 = it }, label = { Text("WiFi 1", color = Color.White) }, colors = fieldColors())
+                OutlinedTextField(pass0, { pass0 = it }, label = { Text("Password 1", color = Color.White) }, colors = fieldColors())
+                OutlinedTextField(ssid1, { ssid1 = it }, label = { Text("WiFi 2", color = Color.White) }, colors = fieldColors())
+                OutlinedTextField(pass1, { pass1 = it }, label = { Text("Password 2", color = Color.White) }, colors = fieldColors())
+                WhiteButton(enabled = linked, onClick = {
+                    session.send("""{"op":"set_wifi","slot":0,"ssid":"${jsonEscape(ssid0)}","password":"${jsonEscape(pass0)}"}""")
+                    session.send("""{"op":"set_wifi","slot":1,"ssid":"${jsonEscape(ssid1)}","password":"${jsonEscape(pass1)}"}""")
+                }) { Text("Save WiFi", color = Color.White) }
+                WhiteButton(enabled = false, onClick = {}) { Text("Find modules", color = Color.White) }
+            }
         }
-        WhiteButton(enabled = false, onClick = {}) { Text("Find modules", color = Color.White) }
     }
     FloatingActionButton(
         onClick = { picker = true },
@@ -314,6 +398,26 @@ fun CangoApp() {
         contentColor = Color.White,
     ) { Text("+", color = Color.White) }
     }
+    }
+    if (help) {
+        AlertDialog(
+            onDismissRequest = { help = false },
+            containerColor = Color(CangoGrey),
+            text = {
+                Column {
+                    Text("Row — one id, newest bytes", color = Color.White)
+                    Text("Check — hide that id here", color = Color.White)
+                    Text("Notch — freeze moving bits", color = Color.White)
+                    Text("Hold — keep quiet ids", color = Color.White)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { help = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                ) { Text("Close") }
+            },
+        )
     }
     if (picker) {
         AlertDialog(

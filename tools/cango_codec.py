@@ -131,6 +131,26 @@ def parse_log(blob):
     return info, records
 
 
+GVRET_HEADER = "Time Stamp,ID,Extended,Bus,LEN,D1,D2,D3,D4,D5,D6,D7,D8"
+
+
+def format_gvret_csv(blob):
+    _info, records = parse_log(blob)
+    lines = [GVRET_HEADER]
+    for rec in records:
+        if rec["type"] != "frame":
+            continue
+        data = rec["data"]
+        length = rec["len"] if rec["len"] <= 8 else 8
+        cells = []
+        for i in range(8):
+            byte = data[i] if i < length and i < len(data) else 0
+            cells.append("%02X" % byte)
+        extended = "true" if rec["flags"] & 0x01 else "false"
+        lines.append("%d,%08X,%s,0,%d,%s," % (rec["t_us"], rec["id"] & 0x1FFFFFFF, extended, length, ",".join(cells)))
+    return "\n".join(lines) + "\n"
+
+
 def format_log(blob):
     info, records = parse_log(blob)
     profile = PROFILE_NAME.get(info["profile"], str(info["profile"]))

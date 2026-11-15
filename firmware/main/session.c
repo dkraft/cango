@@ -185,33 +185,94 @@ int session_handle(const char *json, char *out, int cap, int link)
     if (strcmp(op, "set_filter") == 0) {
         cango_filter_t *f = link_filter(link);
         bool active = true;
+        bool have_ids = false;
         char ext[8];
+        char mode[8];
+        uint32_t ids[CANGO_FILTER_IDS];
         uint32_t n = 0;
-        app_lock();
-        cango_filter_clear(f);
-        grab_bool(json, "active", &active);
-        f->active = active;
-        if (grab_u32(json, "id", &n)) {
-            f->id = n;
-        }
-        if (grab_u32(json, "mask", &n)) {
-            f->mask = n;
-        } else if (f->active) {
-            f->mask = 0x7ff;
-        }
-        if (grab_str(json, "extended", ext, sizeof(ext))) {
-            if (strcmp(ext, "std") == 0) {
-                f->extended = CANGO_EXT_STD;
-            } else if (strcmp(ext, "ext") == 0) {
-                f->extended = CANGO_EXT_EXT;
+        int id_n = 0;
+        const char *id_list = key_at(json, "ids");
+        if (id_list != NULL) {
+            const char *p = id_list;
+            have_ids = true;
+            if (*p != '[') {
+                return reply(out, cap, "{\"op\":\"set_filter\",\"ok\":false,\"error\":\"bad\"}\n");
+            }
+            p++;
+            while (*p != '\0' && *p != ']') {
+                char *end = NULL;
+                unsigned long v;
+                p = skip(p);
+                if (*p == ']' || *p == '\0') {
+                    break;
+                }
+                v = strtoul(p, &end, 10);
+                if (end == p) {
+                    return reply(out, cap, "{\"op\":\"set_filter\",\"ok\":false,\"error\":\"bad\"}\n");
+                }
+                if (id_n >= CANGO_FILTER_IDS) {
+                    return reply(out, cap, "{\"op\":\"set_filter\",\"ok\":false,\"error\":\"full\"}\n");
+                }
+                ids[id_n++] = (uint32_t)v;
+                p = skip(end);
+                if (*p == ',') {
+                    p++;
+                }
             }
         }
-        grab_bool(json, "change_only", &f->change_only);
-        if (grab_u32(json, "min_interval_ms", &n) && n <= 65535) {
-            f->min_interval_ms = (uint16_t)n;
+        grab_bool(json, "active", &active);
+        app_lock();
+        cango_filter_clear(f);
+        if (active && !have_ids) {
+            f->active = true;
+            f->mode = CANGO_FILTER_MODE_MASK;
+            if (grab_u32(json, "id", &n)) {
+                f->id = n;
+            }
+            if (grab_u32(json, "mask", &n)) {
+                f->mask = n;
+            } else {
+                f->mask = 0x7ff;
+            }
+        } else if (active) {
+            uint32_t id_from = 0;
+            uint32_t id_to = 0;
+            bool has_from = grab_u32(json, "id_from", &id_from);
+            bool has_to = grab_u32(json, "id_to", &id_to);
+            f->active = true;
+            f->id_n = (uint8_t)id_n;
+            if (id_n > 0) {
+                memcpy(f->ids, ids, (size_t)id_n * sizeof(ids[0]));
+            }
+            if (grab_str(json, "mode", mode, sizeof(mode)) && strcmp(mode, "only") == 0) {
+                f->mode = CANGO_FILTER_MODE_ONLY;
+            } else {
+                f->mode = CANGO_FILTER_MODE_ALL;
+            }
+            if (has_from && has_to) {
+                f->has_range = true;
+                f->id_from = id_from;
+                f->id_to = id_to;
+            }
+        }
+        if (f->active) {
+            if (grab_str(json, "extended", ext, sizeof(ext))) {
+                if (strcmp(ext, "std") == 0) {
+                    f->extended = CANGO_EXT_STD;
+                } else if (strcmp(ext, "ext") == 0) {
+                    f->extended = CANGO_EXT_EXT;
+                }
+            }
+            grab_bool(json, "change_only", &f->change_only);
+            if (grab_u32(json, "min_interval_ms", &n) && n <= 65535) {
+                f->min_interval_ms = (uint16_t)n;
+            }
         }
         memset(link == LINK_BLE ? &s_ble_filt : &s_wifi_filt, 0, sizeof(cango_filter_state_t));
         app_unlock();
+        if (link == LINK_BLE) {
+            ble_heard_reset();
+        }
         return reply(out, cap, "{\"op\":\"set_filter\",\"ok\":true}\n");
     }
     if (strcmp(op, "set_capture") == 0) {
@@ -411,6 +472,7 @@ void session_offer_frame(const cango_frame_t *frame)
         return;
     }
     if (g_app.mode == CANGO_MODE_WIFI) {
+        gvret_offer_frame(frame);
         if (cango_filter_match(&g_app.wifi_filter, &s_wifi_filt, frame)) {
             wifi_offer_frame(frame);
         }

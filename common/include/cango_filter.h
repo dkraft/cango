@@ -10,6 +10,12 @@
 #define CANGO_EXT_STD 1
 #define CANGO_EXT_EXT 2
 
+/* mode 0 keeps the single id/mask. mode 1 hides ids. mode 2 passes ids and an optional range. */
+#define CANGO_FILTER_MODE_MASK 0
+#define CANGO_FILTER_MODE_ALL 1
+#define CANGO_FILTER_MODE_ONLY 2
+#define CANGO_FILTER_IDS 32
+
 typedef struct {
     uint8_t index;
     uint8_t value;
@@ -26,6 +32,12 @@ typedef struct {
     cango_data_pred_t data[8];
     bool change_only;
     uint16_t min_interval_ms;
+    uint8_t mode; /* CANGO_FILTER_MODE_* */
+    uint8_t id_n;
+    bool has_range;
+    uint32_t ids[CANGO_FILTER_IDS];
+    uint32_t id_from;
+    uint32_t id_to;
 } cango_filter_t;
 
 #define CANGO_FILTER_SLOTS 32

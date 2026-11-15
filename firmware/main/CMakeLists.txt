@@ -9,6 +9,7 @@ idf_component_register(
         "ctrl.c"
         "wifi_mode.c"
         "ble_mode.c"
+        "gvret.c"
     INCLUDE_DIRS "."
-    REQUIRES common nvs_flash esp_wifi esp_http_server esp_event esp_netif bt driver fatfs sdmmc esp_timer vfs
+    REQUIRES common nvs_flash esp_wifi esp_http_server esp_event esp_netif bt driver fatfs sdmmc esp_timer vfs lwip
 )

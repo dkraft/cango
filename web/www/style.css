@@ -1,12 +1,14 @@
 :root {
   color-scheme: dark;
-  --bg: #14181c;
-  --panel: #1d242b;
-  --ink: #e7edf2;
-  --muted: #9aabba;
-  --line: #31404c;
-  --accent: #e0a15a;
-  --ok: #8fbf8a;
+  --bg: #151a1e;
+  --panel: #262d32;
+  --ink: #ffffff;
+  --muted: #8e98a0;
+  --line: #3a4450;
+  --accent: #31576d;
+  --ok: #3ddc6a;
+  --up: #3ddc6a;
+  --down: #e25b5b;
 }
 
 * { box-sizing: border-box; }
@@ -34,10 +36,20 @@ h2 { font-size: 0.95rem; margin-bottom: 0.4rem; }
 .status { text-align: right; }
 
 .tabs { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-.tabs button, aside button, label input, label select {
+.brand { display: flex; align-items: center; gap: 0.6rem; }
+#help, .tools button, #funnel-sheet button, #help-sheet button, #vehicle-picker button, aside button {
+  font: inherit;
+  color: #fff;
+  background: #31576d;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+.tabs button, label input, label select {
   font: inherit;
   color: var(--ink);
-  background: #12171b;
+  background: #151a1e;
   border: 1px solid var(--line);
   border-radius: 4px;
 }
@@ -56,8 +68,18 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   overflow: auto;
   max-height: calc(100vh - 8rem);
   border: 1px solid var(--line);
-  background: var(--panel);
+  background: var(--bg);
 }
+.tools { display: flex; gap: 0.4rem; padding: 0.45rem; position: sticky; top: 0; background: var(--bg); z-index: 1; }
+#sniff td.b {
+  font-family: ui-monospace, monospace;
+  min-width: 1.6rem;
+  text-align: center;
+  background: #151a1e;
+}
+#sniff td.id { font-family: ui-monospace, monospace; }
+#filter-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.4rem 0; }
+#filter-chips label { flex-direction: row; align-items: center; color: var(--ink); }
 table { width: 100%; border-collapse: collapse; }
 th, td {
   text-align: left;
@@ -109,16 +131,17 @@ label input, label select { padding: 0.3rem 0.4rem; }
 }
 #vehicle-picker::backdrop { background: rgba(0, 0, 0, 0.5); }
 #vehicle-picker p { margin: 0 0 0.6rem; }
-#vehicle-picker button {
-  font: inherit;
+#vehicle-picker button, #funnel-sheet button, #help-sheet button { margin-right: 0.4rem; }
+#funnel-sheet, #help-sheet, #vehicle-picker {
+  background: var(--panel);
   color: var(--ink);
-  background: #12171b;
   border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 0.4rem 0.8rem;
-  cursor: pointer;
-  margin-right: 0.4rem;
+  border-radius: 6px;
+  padding: 1rem;
 }
+#funnel-sheet::backdrop, #help-sheet::backdrop, #vehicle-picker::backdrop { background: rgba(0, 0, 0, 0.5); }
+#funnel-sheet input { font: inherit; color: var(--ink); background: #151a1e; border: 1px solid var(--line); border-radius: 4px; padding: 0.3rem 0.4rem; width: 6rem; }
+#help-sheet p { margin: 0.25rem 0; }
 
 @media (max-width: 800px) {
   .top { flex-direction: column; }

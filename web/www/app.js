@@ -12,11 +12,11 @@ let gotHello = false;
 let holdArmedUntil = 0;
 
 function blankFilter() {
-  return { active: false, id: 0, mask: 0x7ff, extended: "any", changeOnly: false, minIntervalMs: 0 };
+  return { mode: "all", ids: [], from: null, to: null };
 }
 
 function makeTab() {
-  return { title: "Generic", filter: blankFilter(), state: new Map(), rows: [] };
+  return { title: "Generic", filter: blankFilter(), sniff: new Map(), hold: false };
 }
 
 function send(obj) {
@@ -46,99 +46,110 @@ function num(selector) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function padData(bytes) {
-  const out = new Uint8Array(8);
-  out.set(bytes.subarray(0, 8));
-  return out;
+function isChecked(filter, id) {
+  if (filter.mode === "only") {
+    if (filter.ids.indexOf(id) >= 0) {
+      return true;
+    }
+    return filter.from != null && filter.to != null && id >= filter.from && id <= filter.to;
+  }
+  return filter.ids.indexOf(id) < 0;
 }
 
-function sameData(a, b) {
+function toggleId(tab, id) {
+  const on = isChecked(tab.filter, id);
+  if (on && tab.filter.mode === "only" && tab.filter.ids.indexOf(id) < 0) {
+    tab.filter.from = null;
+    tab.filter.to = null;
+    render();
+    return;
+  }
+  if (tab.filter.mode === "all") {
+    if (on) {
+      if (tab.filter.ids.length < 32) {
+        tab.filter.ids.push(id);
+      }
+    } else {
+      tab.filter.ids = tab.filter.ids.filter((item) => item !== id);
+    }
+  } else if (on) {
+    tab.filter.ids = tab.filter.ids.filter((item) => item !== id);
+  } else if (tab.filter.ids.length < 32) {
+    tab.filter.ids.push(id);
+  }
+  render();
+}
+
+function visibleRows(tab) {
+  const now = Date.now();
+  const rows = [];
+  tab.sniff.forEach((row) => {
+    if (!isChecked(tab.filter, row.id)) {
+      return;
+    }
+    if (!tab.hold && now - row.lastMs > 5000) {
+      return;
+    }
+    rows.push(row);
+  });
+  rows.sort((a, b) => a.id - b.id);
+  return rows;
+}
+
+function ingest(tab, frame) {
+  const now = Date.now();
+  const key = String(frame.id) + ((frame.flags & 1) ? "e" : "s");
+  let row = tab.sniff.get(key);
+  const incoming = new Uint8Array(8);
   for (let i = 0; i < 8; i++) {
-    if (a[i] !== b[i]) {
-      return false;
-    }
+    incoming[i] = i < frame.data.length ? frame.data[i] : 0;
   }
-  return true;
-}
-
-function acceptFrame(tab, frame) {
-  const f = tab.filter;
-  if (f.active) {
-    const ext = (frame.flags & 0x01) !== 0;
-    if (f.extended === "std" && ext) {
-      return;
-    }
-    if (f.extended === "ext" && !ext) {
-      return;
-    }
-    if ((frame.id & f.mask) !== (f.id & f.mask)) {
-      return;
-    }
-    if (f.changeOnly || f.minIntervalMs > 0) {
-      const key = String(frame.id) + ":" + (ext ? "e" : "s");
-      let slot = tab.state.get(key);
-      const data = padData(frame.data);
-      if (!slot) {
-        slot = { data: null, passed: false, last: 0 };
-        tab.state.set(key, slot);
-      }
-      const same = slot.data !== null && sameData(slot.data, data);
-      slot.data = data;
-      if (f.changeOnly && same) {
-        return;
-      }
-      if (f.minIntervalMs > 0 && slot.passed) {
-        const dt = (frame.tUs - slot.last) >>> 0;
-        if (dt < f.minIntervalMs * 1000) {
-          return;
+  if (!row) {
+    if (tab.sniff.size >= 64) {
+      let oldest = null;
+      let oldestKey = null;
+      tab.sniff.forEach((candidate, candidateKey) => {
+        if (oldest === null || candidate.lastMs < oldest) {
+          oldest = candidate.lastMs;
+          oldestKey = candidateKey;
         }
+      });
+      if (oldestKey !== null) {
+        tab.sniff.delete(oldestKey);
       }
-      slot.passed = true;
-      slot.last = frame.tUs;
+    }
+    tab.sniff.set(key, {
+      id: frame.id,
+      flags: frame.flags,
+      data: incoming,
+      prev: incoming.slice(),
+      changedAt: new Array(8).fill(0),
+      notch: new Uint8Array(8),
+      lastMs: now,
+    });
+    return;
+  }
+  for (let i = 0; i < 8; i++) {
+    if (incoming[i] !== row.data[i]) {
+      row.prev[i] = row.data[i];
+      row.data[i] = incoming[i];
+      row.changedAt[i] = now;
     }
   }
-  tab.rows.push(frame);
-  if (tab.rows.length > 80) {
-    tab.rows.shift();
-  }
+  row.flags = frame.flags;
+  row.lastMs = now;
 }
 
-function readFilterForm() {
-  return {
-    active: document.querySelector("#filter-active").checked,
-    id: parseHex("#filter-id", 0),
-    mask: parseHex("#filter-mask", 0x7ff),
-    extended: document.querySelector("#filter-ext").value,
-    changeOnly: document.querySelector("#filter-change").checked,
-    minIntervalMs: num("#filter-interval"),
-  };
-}
-
-function writeFilterForm(f) {
-  document.querySelector("#filter-active").checked = f.active;
-  document.querySelector("#filter-id").value = f.id.toString(16);
-  document.querySelector("#filter-mask").value = f.mask.toString(16);
-  document.querySelector("#filter-ext").value = f.extended;
-  document.querySelector("#filter-change").checked = f.changeOnly;
-  document.querySelector("#filter-interval").value = String(f.minIntervalMs);
-}
-
-function flagText(flags) {
-  const parts = [];
-  if (flags & 0x01) {
-    parts.push("EXT");
+function byteColor(row, i, now) {
+  const visNew = row.data[i] & (~row.notch[i] & 0xff);
+  const visOld = row.prev[i] & (~row.notch[i] & 0xff);
+  if (now - row.changedAt[i] < 200 && visNew !== visOld) {
+    return visNew > visOld ? "#3DDC6A" : "#E25B5B";
   }
-  if (flags & 0x02) {
-    parts.push("RTR");
+  if (now - row.lastMs > 2000) {
+    return "#8E98A0";
   }
-  if (flags & 0x04) {
-    parts.push("TX");
-  }
-  return parts.join(" ");
-}
-
-function hexBytes(bytes) {
-  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return "#ffffff";
 }
 
 function renderTabs() {
@@ -157,7 +168,6 @@ function renderTabs() {
   add.type = "button";
   add.id = "add-tab";
   add.textContent = "+";
-  add.title = "New Generic tab";
   add.addEventListener("click", addTab);
   nav.appendChild(add);
 }
@@ -165,21 +175,63 @@ function renderTabs() {
 function renderRows() {
   const body = document.querySelector("#rows");
   const tab = tabs[active];
+  const now = Date.now();
   body.replaceChildren();
-  tab.rows.slice(-40).forEach((frame) => {
+  visibleRows(tab).forEach((row) => {
     const tr = document.createElement("tr");
-    const cells = [
-      String(frame.tUs >>> 0),
-      frame.id.toString(16).toUpperCase(),
-      flagText(frame.flags),
-      hexBytes(frame.data),
-    ];
-    cells.forEach((text) => {
-      const td = document.createElement("td");
-      td.textContent = text;
-      tr.appendChild(td);
-    });
+    const check = document.createElement("td");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = isChecked(tab.filter, row.id);
+    box.addEventListener("change", () => toggleId(tab, row.id));
+    check.appendChild(box);
+    tr.appendChild(check);
+    const idCell = document.createElement("td");
+    idCell.className = "id";
+    idCell.textContent = row.id.toString(16).toUpperCase();
+    idCell.style.color = now - row.lastMs > 2000 ? "#8E98A0" : "#ffffff";
+    tr.appendChild(idCell);
+    for (let i = 0; i < 8; i++) {
+      const cell = document.createElement("td");
+      cell.className = "b";
+      cell.textContent = row.data[i].toString(16).toUpperCase().padStart(2, "0");
+      cell.style.color = byteColor(row, i, now);
+      tr.appendChild(cell);
+    }
     body.appendChild(tr);
+  });
+  const hold = document.querySelector("#hold");
+  if (hold) {
+    hold.textContent = tab.hold ? "●" : "○";
+  }
+  renderChips();
+}
+
+function renderChips() {
+  const host = document.querySelector("#filter-chips");
+  const tab = tabs[active];
+  if (!host) {
+    return;
+  }
+  host.replaceChildren();
+  const seen = [];
+  tab.sniff.forEach((row) => seen.push(row.id));
+  tab.filter.ids.forEach((id) => {
+    if (seen.indexOf(id) < 0) {
+      seen.push(id);
+    }
+  });
+  seen.sort((a, b) => a - b);
+  seen.forEach((id) => {
+    const label = document.createElement("label");
+    label.className = "check";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = isChecked(tab.filter, id);
+    box.addEventListener("change", () => toggleId(tab, id));
+    label.appendChild(box);
+    label.appendChild(document.createTextNode(id.toString(16).toUpperCase()));
+    host.appendChild(label);
   });
 }
 
@@ -190,14 +242,12 @@ function render() {
 
 function selectTab(i) {
   active = i;
-  writeFilterForm(tabs[i].filter);
   render();
 }
 
 function addTab() {
   tabs.push(makeTab());
   active = tabs.length - 1;
-  writeFilterForm(tabs[active].filter);
   render();
 }
 
@@ -343,7 +393,7 @@ function connect() {
       return;
     }
     const frames = decodeBatch(ev.data);
-    frames.forEach((frame) => tabs.forEach((tab) => acceptFrame(tab, frame)));
+    frames.forEach((frame) => tabs.forEach((tab) => ingest(tab, frame)));
     renderRows();
   };
   ws.onclose = () => {
@@ -384,27 +434,25 @@ async function runSelfTest() {
     checks.zeroXb = document.querySelector("#pick-zero-xb") !== null;
     checks.injectDisabled = document.querySelector("#send-frame").disabled;
     checks.noModeSwitch = document.querySelector("#mode-switch") === null;
-    document.querySelector("#filter-active").checked = true;
+    document.querySelector("#filter-none").click();
     document.querySelector("#filter-id").value = "100";
-    document.querySelector("#filter-mask").value = "7FF";
-    document.querySelector("#apply-filter").click();
-    checks.tab0Filter = tabs[0].filter.id === 0x100 && tabs[0].filter.active;
+    document.querySelector("#filter-add").click();
+    checks.tab0Filter = tabs[0].filter.mode === "only" && tabs[0].filter.ids[0] === 0x100;
     document.querySelector("#add-tab").click();
-    document.querySelector("#filter-active").checked = true;
+    document.querySelector("#filter-none").click();
     document.querySelector("#filter-id").value = "200";
-    document.querySelector("#filter-mask").value = "7FF";
-    document.querySelector("#apply-filter").click();
-    checks.tab0Unchanged = tabs[0].filter.id === 0x100;
-    checks.tab1Filter = tabs[1].filter.id === 0x200;
-    await waitFor(() => tabs[0].rows.length >= 2 && tabs[1].rows.length >= 2, 5000);
-    checks.tab0Ids = tabs[0].rows.every((row) => row.id === 0x100);
-    checks.tab1Ids = tabs[1].rows.every((row) => row.id === 0x200);
+    document.querySelector("#filter-add").click();
+    checks.tab0Unchanged = tabs[0].filter.mode === "only" && tabs[0].filter.ids[0] === 0x100;
+    checks.tab1Filter = tabs[1].filter.mode === "only" && tabs[1].filter.ids[0] === 0x200;
+    await waitFor(() => visibleRows(tabs[0]).length === 1 && visibleRows(tabs[1]).length === 1, 5000);
+    checks.tab0Ids = visibleRows(tabs[0])[0].id === 0x100;
+    checks.tab1Ids = visibleRows(tabs[1])[0].id === 0x200;
     document.querySelector("#tab-0").click();
     const ids0 = [...document.querySelectorAll("#rows td:nth-child(2)")];
-    checks.tab0Visible = ids0.length > 0 && ids0.every((cell) => cell.textContent === "100");
+    checks.tab0Visible = ids0.length === 1 && ids0.every((cell) => cell.textContent === "100");
     document.querySelector("#tab-1").click();
     const ids1 = [...document.querySelectorAll("#rows td:nth-child(2)")];
-    checks.tab1Visible = ids1.length > 0 && ids1.every((cell) => cell.textContent === "200");
+    checks.tab1Visible = ids1.length === 1 && ids1.every((cell) => cell.textContent === "200");
     document.querySelector("#confirm-arm").checked = true;
     document.querySelector("#confirm-arm").dispatchEvent(new Event("change"));
     document.querySelector("#arm").click();
@@ -417,6 +465,7 @@ async function runSelfTest() {
     const buf = new Uint8Array(await log.arrayBuffer());
     checks.logDownload = log.ok && buf[0] === 0x43 && buf[1] === 0x47 && buf[2] === 0x30 && buf[3] === 0x31;
     checks.noDeviceFilter = sentFilter === 0;
+    checks.help = document.querySelector("#help") !== null && document.querySelector("#help-sheet") !== null;
     document.querySelector("#add-vehicle").click();
     checks.pickerOpen = document.querySelector("#vehicle-picker").open === true;
     document.querySelector("#pick-zero-xb").click();
@@ -439,20 +488,96 @@ async function runSelfTest() {
   }
 }
 
-document.querySelector("#apply-filter").addEventListener("click", () => {
-  tabs[active].filter = readFilterForm();
-  tabs[active].state = new Map();
-  tabs[active].rows = [];
+function addTypedId() {
+  const tab = tabs[active];
+  const id = parseHex("#filter-id", NaN);
+  if (!Number.isFinite(id)) {
+    return;
+  }
+  const toRaw = document.querySelector("#filter-to").value.trim();
+  if (tab.filter.mode !== "only") {
+    tab.filter.ids = tab.filter.ids.filter((item) => item !== id);
+    render();
+    return;
+  }
+  if (toRaw) {
+    const to = Number.parseInt(toRaw, 16);
+    if (Number.isFinite(to)) {
+      tab.filter.from = Math.min(id, to);
+      tab.filter.to = Math.max(id, to);
+    }
+  } else if (tab.filter.ids.indexOf(id) < 0 && tab.filter.ids.length < 32) {
+    tab.filter.ids.push(id);
+  }
+  render();
+}
+
+function addNotch() {
+  const now = Date.now();
+  tabs[active].sniff.forEach((row) => {
+    for (let i = 0; i < 8; i++) {
+      if (now - row.changedAt[i] < 200) {
+        row.notch[i] |= row.data[i] ^ row.prev[i];
+      }
+    }
+  });
   renderRows();
-  note("Tab filter updated");
-});
-document.querySelector("#clear-filter").addEventListener("click", () => {
+}
+
+function clearNotch() {
+  tabs[active].sniff.forEach((row) => row.notch.fill(0));
+  renderRows();
+}
+
+document.querySelector("#filter-all").addEventListener("click", () => {
   tabs[active].filter = blankFilter();
-  tabs[active].state = new Map();
-  tabs[active].rows = [];
-  writeFilterForm(tabs[active].filter);
+  render();
+});
+document.querySelector("#filter-none").addEventListener("click", () => {
+  tabs[active].filter = { mode: "only", ids: [], from: null, to: null };
+  render();
+});
+document.querySelector("#filter-add").addEventListener("click", addTypedId);
+document.querySelector("#funnel").addEventListener("click", () => {
+  document.querySelector("#funnel-sheet").showModal();
+});
+document.querySelector("#funnel-close").addEventListener("click", () => {
+  document.querySelector("#funnel-sheet").close();
+});
+document.querySelector("#help").addEventListener("click", () => {
+  document.querySelector("#help-sheet").showModal();
+});
+document.querySelector("#help-close").addEventListener("click", () => {
+  document.querySelector("#help-sheet").close();
+});
+document.querySelector("#hold").addEventListener("click", () => {
+  tabs[active].hold = !tabs[active].hold;
   renderRows();
 });
+(function wireNotch() {
+  const notch = document.querySelector("#notch");
+  let timer = 0;
+  notch.addEventListener("pointerdown", (ev) => {
+    timer = window.setTimeout(() => {
+      timer = 0;
+      clearNotch();
+    }, 600);
+    ev.preventDefault();
+  });
+  notch.addEventListener("pointerup", () => {
+    if (timer) {
+      window.clearTimeout(timer);
+      timer = 0;
+      addNotch();
+    }
+  });
+  notch.addEventListener("pointercancel", () => {
+    if (timer) {
+      window.clearTimeout(timer);
+      timer = 0;
+    }
+  });
+})();
 document.querySelector("#apply-project").addEventListener("click", () => {
   send({ op: "apply_project", id: document.querySelector("#project").value });
 });
@@ -522,3 +647,8 @@ tabs = [makeTab()];
 render();
 paintArmed();
 connect();
+setInterval(() => {
+  if (!document.hidden) {
+    renderRows();
+  }
+}, 200);

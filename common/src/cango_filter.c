@@ -9,6 +9,38 @@ void cango_filter_clear(cango_filter_t *f)
     }
 }
 
+static bool id_listed(const cango_filter_t *f, uint32_t id)
+{
+    uint8_t i;
+    uint8_t n = f->id_n;
+    if (n > CANGO_FILTER_IDS) {
+        n = CANGO_FILTER_IDS;
+    }
+    for (i = 0; i < n; i++) {
+        if (f->ids[i] == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool id_passes(const cango_filter_t *f, uint32_t id)
+{
+    if (f->mode == CANGO_FILTER_MODE_ALL) {
+        return !id_listed(f, id);
+    }
+    if (f->mode == CANGO_FILTER_MODE_ONLY) {
+        if (id_listed(f, id)) {
+            return true;
+        }
+        if (f->has_range && id >= f->id_from && id <= f->id_to) {
+            return true;
+        }
+        return false;
+    }
+    return (id & f->mask) == (f->id & f->mask);
+}
+
 static cango_filter_slot_t *slot_for(cango_filter_state_t *st, const cango_frame_t *frame)
 {
     int i;
@@ -46,7 +78,7 @@ bool cango_filter_match(const cango_filter_t *f, cango_filter_state_t *st, const
     if (f->extended == CANGO_EXT_EXT && !cango_frame_ext(frame)) {
         return false;
     }
-    if ((frame->id & f->mask) != (f->id & f->mask)) {
+    if (!id_passes(f, frame->id)) {
         return false;
     }
     for (i = 0; i < f->data_n && i < 8; i++) {

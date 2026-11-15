@@ -10,13 +10,13 @@ The BOOT button, after the red startup flash, is the only mode switch. Modes are
 | purple flash | capture writing, 30 seconds |
 | purple solid | capture mode, file closed |
 | blue flash | BLE, waiting for a phone |
-| blue solid | BLE phone linked |
+| blue solid | BLE phone linked. A lost link goes back to flashing |
 | green flash | WiFi access point, station not associated |
 | green solid | station has an address |
 
 Long press (800 ms, once per hold) cycles capture, BLE, WiFi. The gap between 600 and 800 ms is ignored. The last mode is restored from NVS. A first boot with no key starts in capture.
 
-A mounted SD card is the request to log. Entering capture mode opens one folder and writes every frame for 30 seconds. A short press (release before 600 ms) while the LED is purple closes that file and opens another folder for another 30 seconds. No card means the LED stays solid and nothing is written. The folder is `/logs/<stamp>/` with `log.cango` and `log.json`.
+A mounted SD card is the request to log. Entering capture mode opens one folder and writes every frame for 30 seconds. A short press (release before 600 ms) while the LED is purple closes that file and opens another folder for another 30 seconds. No card means the LED stays solid and nothing is written. The folder is `/logs/<stamp>/` with `log.cango`, `log.json`, and `log.csv`. In WiFi mode the board also speaks GVRET on TCP port 23, so SavvyCAN can attach on that port.
 
 ## What this build does not do
 

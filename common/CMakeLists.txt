@@ -4,6 +4,7 @@ idf_component_register(
         "src/cango_capture.c"
         "src/cango_detect.c"
         "src/cango_filter.c"
+        "src/cango_gvret.c"
         "src/cango_log.c"
         "src/cango_mode.c"
         "src/cango_project.c"

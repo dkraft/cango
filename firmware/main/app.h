@@ -72,6 +72,10 @@ void ctrl_start(void);
 void ctrl_boot_release(void);
 void wifi_offer_frame(const cango_frame_t *frame);
 void ble_offer_frame(const cango_frame_t *frame);
+void ble_heard_reset(void);
+void gvret_start(void);
+void gvret_stop(void);
+void gvret_offer_frame(const cango_frame_t *frame);
 
 void session_offer_frame(const cango_frame_t *frame);
 int session_handle(const char *json, char *out, int cap, int link);
