@@ -351,6 +351,17 @@ static void test_project(void)
     p.tx_allow[0] = 0x100;
     expect(cango_project_write(&p, buf, (int)sizeof(buf)) > 0, "write allow");
     expect(cango_project_parse(buf, &q) && cango_tx_allowed(&q, 0x100), "roundtrip allow");
+    expect(cango_project_builtin("zero-xb", &p), "builtin xb");
+    expect(strcmp(p.id, "zero-xb") == 0 && strcmp(p.name, "Zero XB") == 0, "xb name");
+    expect(p.listen_only && p.tx_allow_n == 0, "xb listen empty allow");
+    expect(p.logging.profile == CANGO_PROFILE_DEALER && p.bitrate == 500000, "xb dealer listen");
+    expect(!cango_project_is_generic(p.id), "xb not generic");
+    expect(cango_project_builtin("missing-bike", &q) == false, "unknown builtin");
+    expect(cango_project_write(&p, buf, (int)sizeof(buf)) > 0, "write xb");
+    expect(cango_project_parse(buf, &q), "parse xb");
+    expect(strcmp(q.id, "zero-xb") == 0 && q.tx_allow_n == 0 && q.listen_only, "xb roundtrip");
+    expect(q.logging.profile == CANGO_PROFILE_DEALER, "xb profile kept");
+    expect(cango_project_builtin("generic", &q) && cango_project_is_generic(q.id), "builtin generic");
 }
 
 int main(void)

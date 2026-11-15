@@ -96,6 +96,37 @@ bool cango_project_is_generic(const char *id)
     return id != NULL && strcmp(id, "generic") == 0;
 }
 
+/* 74 V light platform. The bus rate is not published; 500 kbit is the first listen. */
+static void fill_zero_xb(cango_project_t *p)
+{
+    cango_project_generic(p);
+    if (p == NULL) {
+        return;
+    }
+    memcpy(p->id, "zero-xb", 8);
+    memcpy(p->name, "Zero XB", 8);
+    p->bitrate = 500000;
+    p->listen_only = true;
+    p->logging.profile = CANGO_PROFILE_DEALER;
+    p->tx_allow_n = 0;
+}
+
+bool cango_project_builtin(const char *id, cango_project_t *p)
+{
+    if (id == NULL || p == NULL) {
+        return false;
+    }
+    if (strcmp(id, "generic") == 0) {
+        cango_project_generic(p);
+        return true;
+    }
+    if (strcmp(id, "zero-xb") == 0) {
+        fill_zero_xb(p);
+        return true;
+    }
+    return false;
+}
+
 static uint8_t profile_from_name(const char *s)
 {
     if (strcmp(s, "startup") == 0) {

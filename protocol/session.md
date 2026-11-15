@@ -30,7 +30,7 @@ The page keeps one view filter per tab and does not send `set_filter`. The firmw
 
 `status` and `capture_status` return `bus_status`: state, tec, rec, rx, missed, dropped, sd, capture (`idle`, `running`, `complete`), mode, bitrate, listen_only, armed, profile, project, ap, sta. The device also pushes this about once a second.
 
-`get_projects`, `put_project`, `delete_project`, `apply_project`. `put_project` carries the project fields beside `op`. `id` `generic` is rejected. Apply loads Generic from firmware, or a named file from the card. It does not reopen a capture that is already running.
+`get_projects`, `put_project`, `delete_project`, `apply_project`. `put_project` carries the project fields beside `op`. `id` `generic` is rejected. Apply loads Generic or `zero-xb` from firmware when the card has no file for that id. A named file on the card overrides the built-in. An unknown id with no file returns `missing`. It does not reopen a capture that is already running. `zero-xb` is listen-only, dealer capture, 500 kbit/s as the first listen, and an empty allow list.
 
 `set_capture` takes `profile` (`dealer`, `startup`, `both`) and optional seconds: `startup_max_s`, `startup_quiet_s`, `dealer_quiet_s`, `dealer_context_s`, `complete_on_user_events`. The value is stored on the device. A named project file is updated. Generic is not rewritten.
 

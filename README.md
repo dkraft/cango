@@ -22,7 +22,7 @@ The default capture profile is `dealer`. The page or the app can change it to `s
 
 Injection is the only transmit path: arm, confirm, an id on the project allow list, then one frame. After 60 seconds the controller returns to listen-only. An empty allow list rejects every id.
 
-There is no second CAN channel, no gateway, and no man-in-the-middle. `discover` and `run_action` return `not_implemented`. The Modules and Actions panels are visible and disabled. The log is not a seed/key, immobilizer, odometer, emissions, or chassis-control procedure, and the firmware does not invent one.
+There is no second CAN channel, no gateway, and no man-in-the-middle. `discover` and `run_action` return `not_implemented`. Find modules stays visible and disabled. The + control starts a vehicle. Zero XB is a built-in listen-only dealer project with an empty allow list, so the first job is to record the bus. A card file named `zero-xb` overrides that built-in. The log is not a seed/key, immobilizer, odometer, emissions, or chassis-control procedure, and the firmware does not invent one.
 
 ## Layout
 

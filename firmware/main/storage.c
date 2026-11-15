@@ -289,6 +289,31 @@ bool storage_delete_project(const char *id)
     return remove(path) == 0;
 }
 
+static int append_written_project(char *buf, int cap, int used, const cango_project_t *project)
+{
+    char body[768];
+    int n;
+    int comma;
+    if (cango_project_write(project, body, (int)sizeof(body)) < 0) {
+        return -1;
+    }
+    n = (int)strlen(body);
+    if (n > 0 && body[n - 1] == '\n') {
+        n--;
+    }
+    comma = (used > 0 && buf[used - 1] != '[') ? 1 : 0;
+    if (used + comma + n + 4 >= cap) {
+        return -1;
+    }
+    if (comma) {
+        buf[used++] = ',';
+    }
+    memcpy(buf + used, body, (size_t)n);
+    used += n;
+    buf[used] = 0;
+    return used;
+}
+
 int storage_projects_json(char *buf, int cap)
 {
     int used = 0;
@@ -335,19 +360,21 @@ int storage_projects_json(char *buf, int cap)
         closedir(d);
     }
     if (count == 0) {
-        char body[768];
         cango_project_t p;
         cango_project_generic(&p);
-        if (cango_project_write(&p, body, (int)sizeof(body)) < 0) {
+        used = append_written_project(buf, cap, used, &p);
+        if (used < 0) {
             return -1;
         }
-        if (used + (int)strlen(body) + 3 >= cap) {
+    }
+    if (strstr(buf, "\"id\":\"zero-xb\"") == NULL) {
+        cango_project_t p;
+        if (!cango_project_builtin("zero-xb", &p)) {
             return -1;
         }
-        memcpy(buf + used, body, strlen(body));
-        used += (int)strlen(body);
-        if (buf[used - 1] == '\n') {
-            buf[--used] = 0;
+        used = append_written_project(buf, cap, used, &p);
+        if (used < 0) {
+            return -1;
         }
     }
     if (used + 3 >= cap) {

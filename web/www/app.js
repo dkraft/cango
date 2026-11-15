@@ -405,7 +405,9 @@ async function runSelfTest() {
     await waitFor(() => gotHello, 3000);
     checks.profileDefault = document.querySelector("#profile").value === "dealer";
     checks.modulesDisabled = document.querySelector("#find-modules").disabled;
-    checks.actionsDisabled = document.querySelector("#run-action").disabled;
+    checks.noRunAction = document.querySelector("#run-action") === null;
+    checks.addVehicle = document.querySelector("#add-vehicle") !== null;
+    checks.zeroXb = document.querySelector("#pick-zero-xb") !== null;
     checks.injectDisabled = document.querySelector("#send-frame").disabled;
     checks.noModeSwitch = document.querySelector("#mode-switch") === null;
     document.querySelector("#filter-active").checked = true;
@@ -445,6 +447,12 @@ async function runSelfTest() {
     const buf = new Uint8Array(await log.arrayBuffer());
     checks.logDownload = log.ok && buf[0] === 0x43 && buf[1] === 0x47 && buf[2] === 0x30 && buf[3] === 0x31;
     checks.noDeviceFilter = sentFilter === 0;
+    document.querySelector("#add-vehicle").click();
+    checks.pickerOpen = document.querySelector("#vehicle-picker").open === true;
+    document.querySelector("#pick-zero-xb").click();
+    checks.pickerClosed = document.querySelector("#vehicle-picker").open === false;
+    await waitFor(() => document.querySelector("#op-note").textContent.indexOf("apply_project ok") !== -1, 2000);
+    checks.zeroApplied = true;
   } catch (err) {
     error = String(err);
   }
@@ -490,6 +498,16 @@ document.querySelector("#save-capture").addEventListener("click", () => {
 });
 document.querySelector("#apply-project").addEventListener("click", () => {
   send({ op: "apply_project", id: document.querySelector("#project").value });
+});
+document.querySelector("#add-vehicle").addEventListener("click", () => {
+  document.querySelector("#vehicle-picker").showModal();
+});
+document.querySelector("#close-vehicle").addEventListener("click", () => {
+  document.querySelector("#vehicle-picker").close();
+});
+document.querySelector("#pick-zero-xb").addEventListener("click", () => {
+  document.querySelector("#vehicle-picker").close();
+  send({ op: "apply_project", id: "zero-xb" });
 });
 document.querySelector("#delete-project").addEventListener("click", () => {
   const id = document.querySelector("#project").value;

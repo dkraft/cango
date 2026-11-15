@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -15,14 +16,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
@@ -195,6 +199,8 @@ fun CangoApp() {
     var mode by remember { mutableStateOf("") }
     var capture by remember { mutableStateOf("idle") }
     var profile by remember { mutableStateOf("dealer") }
+    var project by remember { mutableStateOf("generic") }
+    var picker by remember { mutableStateOf(false) }
     var armed by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
     var screen by remember { mutableIntStateOf(0) }
@@ -219,6 +225,7 @@ fun CangoApp() {
                 if (obj.optString("op") == "bus_status") {
                     armed = obj.optBoolean("armed")
                     profile = obj.optString("profile", profile)
+                    project = obj.optString("project", project)
                     capture = obj.optString("capture", capture)
                     val reported = obj.optString("mode")
                     if (reported.isNotEmpty()) mode = reported
@@ -235,7 +242,8 @@ fun CangoApp() {
     }
     MaterialTheme(colorScheme = CangoScheme) {
     Surface(Modifier.fillMaxSize(), color = CangoScheme.background, contentColor = Color.White) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp).padding(bottom = 72.dp)) {
         LedStatus(mode, capture)
         Row {
             WhiteButton(onClick = {
@@ -295,8 +303,40 @@ fun CangoApp() {
             }
         }
         WhiteButton(enabled = false, onClick = {}) { Text("Find modules", color = Color.White) }
-        WhiteButton(enabled = false, onClick = {}) { Text("Run action", color = Color.White) }
     }
+    FloatingActionButton(
+        onClick = { picker = true },
+        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).semantics {
+            contentDescription = if (project == "zero-xb") "Vehicle Zero XB" else "Vehicle"
+        },
+        containerColor = Color(0xFF31576D),
+        contentColor = Color.White,
+    ) { Text("+", color = Color.White) }
+    }
+    }
+    if (picker) {
+        AlertDialog(
+            onDismissRequest = { picker = false },
+            containerColor = Color(CangoGrey),
+            title = { Text("Vehicle", color = Color.White) },
+            text = {
+                TextButton(
+                    onClick = {
+                        session.send("""{"op":"apply_project","id":"zero-xb"}""")
+                        project = "zero-xb"
+                        profile = "dealer"
+                        picker = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                ) { Text("Zero XB") }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { picker = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                ) { Text("Close") }
+            },
+        )
     }
     }
 }

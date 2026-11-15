@@ -43,6 +43,26 @@ GENERIC = {
     "actions": [],
 }
 
+ZERO_XB = {
+    "id": "zero-xb",
+    "name": "Zero XB",
+    "bitrate": 500000,
+    "listen_only": True,
+    "saved_filters": [],
+    "logging": {
+        "capture_profile": "dealer",
+        "startup_max_s": 60,
+        "startup_quiet_s": 3,
+        "dealer_quiet_s": 5,
+        "dealer_context_s": 5,
+        "complete_on_user_events": 0,
+        "min_free_mb": 64,
+    },
+    "tx_allow": [],
+    "modules": [],
+    "actions": [],
+}
+
 SAMPLE_FRAME = pack_frame(1000, 0x7E0, 0, bytes((0x02, 0x10, 0x01)))
 SAMPLE_LOG = encode_log(
     {"bitrate": 500000, "listen_only": 1, "profile": 0, "project_id": "generic", "unix_s": 1700000000, "start_us": 1000},
@@ -108,7 +128,7 @@ def handle_op(msg):
     if op == "hello":
         return {"op": "hello", "ok": True, "version": "0.1.0", "mode": "wifi", "ap": "CANGO-SIM"}
     if op == "get_projects":
-        return {"op": "get_projects", "ok": True, "projects": [GENERIC]}
+        return {"op": "get_projects", "ok": True, "projects": [GENERIC, ZERO_XB]}
     if op == "list_logs":
         return {
             "op": "list_logs",
@@ -133,10 +153,10 @@ def handle_op(msg):
         return {"op": "set_capture", "ok": True}
     if op == "apply_project":
         ident = msg.get("id", "")
-        if ident != "generic":
+        if ident not in ("generic", "zero-xb"):
             return {"op": "apply_project", "ok": False, "error": "missing"}
         with STATE.lock:
-            STATE.project = "generic"
+            STATE.project = ident
             STATE.profile = "dealer"
         return {"op": "apply_project", "ok": True}
     if op == "put_project":

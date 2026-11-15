@@ -85,6 +85,40 @@ label input, label select { padding: 0.3rem 0.4rem; }
 #log-list { margin: 0; padding-left: 1.1rem; }
 #log-list a { color: var(--ok); }
 #op-note { min-height: 1.2rem; }
+#add-vehicle {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 3;
+  width: 3.25rem;
+  height: 3.25rem;
+  border: 0;
+  border-radius: 50%;
+  background: #31576d;
+  color: #fff;
+  font-size: 1.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+#vehicle-picker {
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1rem;
+}
+#vehicle-picker::backdrop { background: rgba(0, 0, 0, 0.5); }
+#vehicle-picker p { margin: 0 0 0.6rem; }
+#vehicle-picker button {
+  font: inherit;
+  color: var(--ink);
+  background: #12171b;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  margin-right: 0.4rem;
+}
 
 @media (max-width: 800px) {
   .top { flex-direction: column; }

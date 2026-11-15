@@ -25,6 +25,9 @@ typedef struct {
 void cango_project_generic(cango_project_t *p);
 bool cango_project_is_generic(const char *id);
 
+/* Firmware copy of Generic or Zero XB. A card file of the same id overrides it. */
+bool cango_project_builtin(const char *id, cango_project_t *p);
+
 /* Parses the fields we store. Missing fields keep the Generic defaults.
  * Returns false if the buffer is not an object or the profile is unknown. */
 bool cango_project_parse(const char *json, cango_project_t *out);

@@ -281,22 +281,26 @@ int session_handle(const char *json, char *out, int cap, int link)
         FILE *f;
         char body[1024];
         size_t nread;
+        bool from_file = false;
+        cango_project_generic(&p);
         if (!grab_str(json, "id", id, sizeof(id))) {
             return reply(out, cap, "{\"op\":\"apply_project\",\"ok\":false}\n");
         }
-        cango_project_generic(&p);
         if (!cango_project_is_generic(id) && g_app.sd_ok) {
             snprintf(path, sizeof(path), "/sdcard/projects/%s.json", id);
             f = fopen(path, "r");
-            if (f == NULL) {
-                return reply(out, cap, "{\"op\":\"apply_project\",\"ok\":false,\"error\":\"missing\"}\n");
+            if (f != NULL) {
+                nread = fread(body, 1, sizeof(body) - 1, f);
+                fclose(f);
+                body[nread] = 0;
+                if (!cango_project_parse(body, &p)) {
+                    return reply(out, cap, "{\"op\":\"apply_project\",\"ok\":false,\"error\":\"bad_json\"}\n");
+                }
+                from_file = true;
             }
-            nread = fread(body, 1, sizeof(body) - 1, f);
-            fclose(f);
-            body[nread] = 0;
-            if (!cango_project_parse(body, &p)) {
-                return reply(out, cap, "{\"op\":\"apply_project\",\"ok\":false,\"error\":\"bad_json\"}\n");
-            }
+        }
+        if (!from_file && !cango_project_builtin(id, &p)) {
+            return reply(out, cap, "{\"op\":\"apply_project\",\"ok\":false,\"error\":\"missing\"}\n");
         }
         app_lock();
         g_app.project = p;
