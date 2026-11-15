@@ -59,14 +59,35 @@ static void advertise(void)
     const char *name = "CANGO";
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.uuids128 = &UUID_SVC;
+    fields.num_uuids128 = 1;
+    fields.uuids128_is_complete = 1;
     fields.name = (uint8_t *)name;
     fields.name_len = 5;
     fields.name_is_complete = 1;
-    ble_gap_adv_set_fields(&fields);
+    int rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "adv fields %d", rc);
+        fields.name = NULL;
+        fields.name_len = 0;
+        fields.name_is_complete = 0;
+        rc = ble_gap_adv_set_fields(&fields);
+        if (rc != 0) {
+            ESP_LOGW(TAG, "adv uuid %d", rc);
+        }
+        memset(&fields, 0, sizeof(fields));
+        fields.name = (uint8_t *)name;
+        fields.name_len = 5;
+        fields.name_is_complete = 1;
+        ble_gap_adv_rsp_set_fields(&fields);
+    }
     memset(&adv, 0, sizeof(adv));
     adv.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER, &adv, gap_event, NULL);
+    rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER, &adv, gap_event, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv start %d", rc);
+    }
 }
 
 static int gap_event(struct ble_gap_event *event, void *arg)

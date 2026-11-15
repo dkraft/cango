@@ -1,6 +1,7 @@
 package app.cango
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -11,6 +12,7 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
@@ -26,6 +28,7 @@ class BleSession(
     private val onFrames: (List<CanFrame>) -> Unit,
     private val onJson: (String) -> Unit,
 ) {
+    private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val manager = context.getSystemService(BluetoothManager::class.java)
     private val adapter = manager.adapter
@@ -36,13 +39,17 @@ class BleSession(
     private val descQueue: ArrayDeque<BluetoothGattDescriptor> = ArrayDeque()
     private var gattBusy = false
     private var announced = false
+    private var subscribed = false
+    private var fallbackScan = false
+    private var opening = false
+    private val gate = Any()
     private val outQueue: ArrayDeque<ByteArray> = ArrayDeque()
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            stopScan()
-            result.device.connectGatt(context, false, gattCallback)
-            post("connecting")
+            // Filters are already name OR service UUID. A second name check drops
+            // results whose scan record leaves deviceName null.
+            connect(result.device)
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -52,25 +59,65 @@ class BleSession(
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothGatt.STATE_CONNECTED) {
+            if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 gatt = g
+                fallbackScan = false
                 g.discoverServices()
                 post("connected")
-            } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                post("disconnected")
+                return
+            }
+            if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                val retry = fallbackScan
+                fallbackScan = false
+                synchronized(gate) { opening = false }
+                subscribed = false
+                announced = false
+                writeChar = null
+                gattBusy = false
+                descQueue.clear()
+                post(if (status == BluetoothGatt.GATT_SUCCESS) "disconnected" else "disconnected $status")
                 g.close()
                 if (gatt === g) {
                     gatt = null
+                }
+                if (retry) {
+                    main.post { scan() }
                 }
             }
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                post("discover failed $status")
+                return
+            }
             val service = g.getService(Gatt.service) ?: run {
                 post("service missing")
                 return
             }
             writeChar = service.getCharacteristic(Gatt.ctrlWrite)
+            if (!g.requestMtu(247)) {
+                subscribe(g)
+            } else {
+                main.postDelayed({
+                    if (!subscribed && gatt === g) subscribe(g)
+                }, 1500)
+            }
+        }
+
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            subscribe(g)
+        }
+
+        private fun subscribe(g: BluetoothGatt) {
+            synchronized(gate) {
+                if (subscribed) return
+                subscribed = true
+            }
+            val service = g.getService(Gatt.service) ?: run {
+                post("service missing")
+                return
+            }
             enable(g, service.getCharacteristic(Gatt.ctrlNotify))
             enable(g, service.getCharacteristic(Gatt.dataNotify))
             post("ready")
@@ -94,8 +141,21 @@ class BleSession(
             pumpWrites(g)
         }
 
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+        ) {
+            onNotify(characteristic, value)
+        }
+
+        @Deprecated("Deprecated in Java")
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            val value = characteristic.value ?: return
+            if (Build.VERSION.SDK_INT >= 33) return
+            onNotify(characteristic, characteristic.value ?: return)
+        }
+
+        private fun onNotify(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             if (characteristic.uuid == Gatt.dataNotify) {
                 try {
                     val (_, frames) = Codec.decodeBatch(value)
@@ -118,14 +178,65 @@ class BleSession(
 
     @SuppressLint("MissingPermission")
     fun startScan() {
+        stopScan()
+        synchronized(gate) { opening = false }
+        fallbackScan = false
+        val radio = adapter
+        if (radio == null || !radio.isEnabled) {
+            post("bluetooth off")
+            return
+        }
+        val paired = radio.bondedDevices?.firstOrNull { it.name == "CANGO" }
+        if (paired != null) {
+            fallbackScan = true
+            connect(paired)
+            return
+        }
+        scan()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun scan() {
         val scanner = adapter?.bluetoothLeScanner ?: run {
             post("bluetooth off")
             return
         }
-        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(Gatt.service)).build()
+        stopScan()
+        val filters = listOf(
+            ScanFilter.Builder().setDeviceName("CANGO").build(),
+            ScanFilter.Builder().setServiceUuid(ParcelUuid(Gatt.service)).build(),
+        )
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        scanner.startScan(listOf(filter), settings, scanCallback)
+        scanner.startScan(filters, settings, scanCallback)
         post("scanning")
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connect(device: BluetoothDevice) {
+        synchronized(gate) {
+            if (opening) return
+            opening = true
+        }
+        stopScan()
+        main.post {
+            val previous = gatt
+            gatt = null
+            previous?.close()
+            subscribed = false
+            announced = false
+            writeChar = null
+            post("connecting")
+            val opened = device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            gatt = opened
+            if (opened == null) {
+                synchronized(gate) { opening = false }
+                post("connect failed")
+                if (fallbackScan) {
+                    fallbackScan = false
+                    scan()
+                }
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -157,6 +268,7 @@ class BleSession(
     @SuppressLint("MissingPermission")
     fun close() {
         stopScan()
+        synchronized(gate) { opening = false }
         gatt?.close()
         gatt = null
     }
