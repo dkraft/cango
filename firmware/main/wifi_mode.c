@@ -1,5 +1,6 @@
 #include "app.h"
 #include "cango_batch.h"
+#include "cango_path.h"
 
 #include "esp_event.h"
 #include "esp_http_server.h"
@@ -15,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static void copy_fit(char *dst, size_t cap, const char *src)
 {
@@ -201,6 +203,88 @@ static esp_err_t page_get(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+static int hex_val(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool url_path(char *dst, size_t cap, const char *src)
+{
+    size_t i = 0;
+    if (dst == NULL || cap == 0) {
+        return false;
+    }
+    if (src == NULL) {
+        dst[0] = '\0';
+        return true;
+    }
+    while (*src != '\0' && *src != '?' && *src != '#') {
+        char c = *src++;
+        if (c == '%') {
+            int hi = hex_val(*src);
+            int lo = hex_val(src[1]);
+            if (hi < 0 || lo < 0) {
+                return false;
+            }
+            src += 2;
+            c = (char)((hi << 4) | lo);
+        }
+        if (i + 1 >= cap) {
+            return false;
+        }
+        dst[i++] = c;
+    }
+    dst[i] = '\0';
+    return true;
+}
+
+static esp_err_t sd_get(httpd_req_t *req)
+{
+    char rel[128];
+    char path[192];
+    char disp[80];
+    const char *base;
+    struct stat st;
+    const char *rest = req->uri + strlen("/sd/");
+    if (!url_path(rel, sizeof(rel), rest) || !cango_path_under(path, sizeof(path), "/sdcard", rel)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "path");
+        return ESP_FAIL;
+    }
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "missing");
+        return ESP_FAIL;
+    }
+    base = strrchr(path, '/');
+    base = base != NULL ? base + 1 : path;
+    {
+        static const char prefix[] = "attachment; filename=\"";
+        size_t nb = strlen(base);
+        size_t np = sizeof(prefix) - 1;
+        if (nb > 47) {
+            nb = 47;
+        }
+        memcpy(disp, prefix, np);
+        memcpy(disp + np, base, nb);
+        disp[np + nb] = '"';
+        disp[np + nb + 1] = '\0';
+    }
+    httpd_resp_set_hdr(req, "Content-Disposition", disp);
+    if (send_file(req, path) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "missing");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t logs_get(httpd_req_t *req)
 {
     char path[160];
@@ -222,6 +306,7 @@ static void start_httpd(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     httpd_uri_t ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_get, .is_websocket = true};
     httpd_uri_t logs = {.uri = "/logs/*", .method = HTTP_GET, .handler = logs_get};
+    httpd_uri_t sd = {.uri = "/sd/*", .method = HTTP_GET, .handler = sd_get};
     httpd_uri_t page = {.uri = "/*", .method = HTTP_GET, .handler = page_get};
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     cfg.max_uri_handlers = 8;
@@ -233,6 +318,7 @@ static void start_httpd(void)
     }
     httpd_register_uri_handler(s_httpd, &ws);
     httpd_register_uri_handler(s_httpd, &logs);
+    httpd_register_uri_handler(s_httpd, &sd);
     httpd_register_uri_handler(s_httpd, &page);
 }
 

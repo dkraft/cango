@@ -20,7 +20,7 @@ A frame is `t_us u32`, `id u32`, `flags u8`, `len u8`, `data[8]`, `reserved u16`
 
 ## Link
 
-WebSocket path `/ws`. Text frames are JSON. Binary frames are batches. `GET /logs/<folder>/<file>` downloads a log. Each capture is a folder under `/logs` containing `log.cango`, `log.json`, and `log.csv`. The web files live on the card at `/www`.
+WebSocket path `/ws`. Text frames are JSON. Binary frames are batches. `GET /logs/<folder>/<file>` downloads a log. `GET /sd/<path>` downloads any file under the card root. Each capture is a folder under `/logs` containing `log.cango`, `log.json`, and `log.csv`. The web files live on the card at `/www`.
 
 The page keeps one view filter per tab and does not send `set_filter`. The firmware has a single WiFi filter, so a device-wide filter would starve every tab. BLE does send `set_filter`, because that link cannot carry a busy bus. Checked ids are notified at most every 200 ms, latest frame per id, for up to 64 ids. Capture files ignore both filters. WiFi mode also accepts one GVRET client on TCP port 23. That socket carries the full bus, not the page filter. A new connection replaces the old one. USB serial stays the log console.
 
@@ -47,3 +47,7 @@ WiFi mode answers GVRET on port 23. Two `0xE7` bytes enter binary mode. Commands
 `discover` and `run_action` return `{ok:false, error:not_implemented}`.
 
 `list_logs` returns `{name, kind, bytes}`. `kind` is the capture folder name.
+
+`list_dir` takes `path` relative to the card root and `skip`. An empty path is the root. The reply is `{path, skip, entries, more}`. Each entry is `{name, dir, bytes}`. Directories are listed first. A page is eight names, and the directory keeps at most 96. `..`, a leading slash, and a name that cannot be stored in JSON are `error` `bad`. No card is `error` `sd`. A missing folder is `error` `missing`. A blank card root is given `www`, `projects`, and `logs`, and `projects/generic.json` is written when that file is missing.
+
+`delete_path` removes that file or folder. The card root and `projects/generic.json` return `error` `rejected`. A path inside the capture folder that is still open returns `error` `busy`. A missing path returns `error` `missing`.

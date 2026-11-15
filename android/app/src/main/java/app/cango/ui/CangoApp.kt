@@ -71,7 +71,7 @@ internal fun fieldColors() = OutlinedTextFieldDefaults.colors(
 )
 
 @Composable
-private fun WhiteButton(
+internal fun WhiteButton(
     onClick: () -> Unit,
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
@@ -255,6 +255,7 @@ fun CangoApp() {
     var sendId by remember { mutableStateOf("123") }
     var sendData by remember { mutableStateOf("") }
     val sniff = remember { SniffModel() }
+    val files = remember { CardModel() }
     val session = remember {
         BleSession(
             context.applicationContext,
@@ -281,6 +282,10 @@ fun CangoApp() {
                     if (reported.isNotEmpty()) mode = reported
                     heard = System.currentTimeMillis()
                     linked = true
+                } else if (obj.optString("op") == "list_dir") {
+                    files.apply(obj)
+                } else if (obj.optString("op") == "delete_path" && obj.optBoolean("ok")) {
+                    files.refresh()
                 } else if (obj.optString("op") == "get_wifi") {
                     val entries = obj.optJSONArray("entries")
                     if (entries != null) {
@@ -325,6 +330,12 @@ fun CangoApp() {
     LaunchedEffect(linked, sniff.rev) {
         if (linked) session.send(sniff.json())
     }
+    val cardPath = files.path
+    val cardSkip = files.skip
+    val cardGen = files.generation
+    LaunchedEffect(linked, menu, screen, cardPath, cardSkip, cardGen) {
+        if (linked && !menu && screen == 2) session.send(files.request())
+    }
     MaterialTheme(colorScheme = CangoScheme) {
     Surface(Modifier.fillMaxSize(), color = CangoScheme.background, contentColor = Color.White) {
     Box(Modifier.fillMaxSize()) {
@@ -346,7 +357,7 @@ fun CangoApp() {
         Row {
             WhiteButton(onClick = { menu = false; screen = 0 }) { Text("Live", color = Color.White) }
             WhiteButton(onClick = { menu = false; screen = 1 }) { Text("Inject", color = Color.White) }
-            WhiteButton(onClick = { menu = false; screen = 2 }) { Text("Logs", color = Color.White) }
+            WhiteButton(onClick = { menu = false; screen = 2 }) { Text("Files", color = Color.White) }
         }
         when (if (menu) 3 else screen) {
             0 -> SniffView(sniff)
@@ -365,9 +376,7 @@ fun CangoApp() {
                     session.send("""{"op":"send_frame","id":$id,"data":"$data"}""")
                 }) { Text("Send frame", color = Color.White) }
             }
-            2 -> {
-                WhiteButton(onClick = { session.send("""{"op":"list_logs"}""") }) { Text("List names", color = Color.White) }
-            }
+            2 -> FilesView(files) { session.send(it) }
             3 -> {
                 WhiteButton(onClick = {
                     val needed = if (Build.VERSION.SDK_INT >= 31) {
@@ -409,6 +418,7 @@ fun CangoApp() {
                     Text("Check — hide that id here", color = Color.White)
                     Text("Notch — freeze moving bits", color = Color.White)
                     Text("Hold — keep quiet ids", color = Color.White)
+                    Text("Files — open a folder or drop a row", color = Color.White)
                 }
             },
             confirmButton = {

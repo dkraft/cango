@@ -175,6 +175,33 @@ int session_handle(const char *json, char *out, int cap, int link)
     if (strcmp(op, "list_logs") == 0) {
         return storage_logs_json(out, cap);
     }
+    if (strcmp(op, "list_dir") == 0) {
+        char rel[96];
+        uint32_t skip = 0;
+        int n;
+        rel[0] = '\0';
+        if (key_at(json, "path") != NULL && !grab_str(json, "path", rel, sizeof(rel))) {
+            return reply(out, cap, "{\"op\":\"list_dir\",\"ok\":false,\"error\":\"bad\",\"path\":\"\"}\n");
+        }
+        grab_u32(json, "skip", &skip);
+        n = storage_dir_json(out, cap, rel, (int)skip);
+        if (n < 0) {
+            return reply(out, cap, "{\"op\":\"list_dir\",\"ok\":false,\"error\":\"full\",\"path\":\"\"}\n");
+        }
+        return n;
+    }
+    if (strcmp(op, "delete_path") == 0) {
+        char rel[96];
+        const char *err;
+        if (!grab_str(json, "path", rel, sizeof(rel)) || rel[0] == '\0') {
+            return reply(out, cap, "{\"op\":\"delete_path\",\"ok\":false,\"error\":\"bad\"}\n");
+        }
+        err = storage_delete_path(rel);
+        if (err != NULL) {
+            return reply(out, cap, "{\"op\":\"delete_path\",\"ok\":false,\"error\":\"%s\"}\n", err);
+        }
+        return reply(out, cap, "{\"op\":\"delete_path\",\"ok\":true}\n");
+    }
     if (strcmp(op, "capture_status") == 0 || strcmp(op, "status") == 0) {
         session_status(out, cap);
         return (int)strlen(out);

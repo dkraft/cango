@@ -177,6 +177,18 @@ bool ctrl_capture_complete(void)
     return s_complete;
 }
 
+void ctrl_capture_dir(char *out, int cap)
+{
+    if (out == NULL || cap < 2) {
+        return;
+    }
+    out[0] = '\0';
+    if (!s_running || s_dir[0] == '\0') {
+        return;
+    }
+    snprintf(out, (size_t)cap, "%s", s_dir);
+}
+
 static void paint(uint32_t now_ms)
 {
     bool on = ((now_ms / 150) % 2) == 0;

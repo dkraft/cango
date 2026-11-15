@@ -35,7 +35,7 @@ There is no second CAN channel, no gateway, and no man-in-the-middle. `discover`
 | `android/` | BLE client. The installable APK is the GitHub release asset |
 | `protocol/` | session JSON and CANGO1 bytes |
 
-Factory station networks, seeded once into NVS, are `BPSSI` and `mifi`, both with password `KoalaBear`. Later edits are kept. The access point is `CANGO-XXXX` from the chip id and stays up while station association is tried in that order. Solid green means a station address exists. Logs download over HTTP only.
+Factory station networks, seeded once into NVS, are `BPSSI` and `mifi`, both with password `KoalaBear`. Later edits are kept. The access point is `CANGO-XXXX` from the chip id and stays up while station association is tried in that order. Solid green means a station address exists. The Files list browses the card. A file downloads from the page. Dropping a row deletes it, except the folder still being written and `projects/generic.json`.
 
 ## Checks on a machine without ESP-IDF
 

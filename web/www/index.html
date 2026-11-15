@@ -43,9 +43,14 @@
       <button id="save-project" type="button">Save project</button>
     </section>
     <section>
-      <h2>Logs</h2>
-      <ul id="log-list"></ul>
-      <button id="reload-logs" type="button">Refresh</button>
+      <h2>Files</h2>
+      <div class="row">
+        <button id="file-up" type="button" aria-label="Up">↑</button>
+        <span id="file-path"></span>
+        <button id="file-refresh" type="button" aria-label="Refresh">↻</button>
+      </div>
+      <ul id="file-list"></ul>
+      <button id="file-more" type="button" hidden>↓</button>
     </section>
     <section>
       <h2>Inject</h2>
@@ -97,7 +102,13 @@
   <p>Check — hide that id here</p>
   <p>Notch — freeze moving bits</p>
   <p>Hold — keep quiet ids</p>
+  <p>Files — open a folder or drop a row</p>
   <button id="help-close" type="button">Close</button>
+</dialog>
+<dialog id="file-sheet">
+  <p id="file-delete-name"></p>
+  <button id="file-delete" type="button">Delete</button>
+  <button id="file-delete-close" type="button">Close</button>
 </dialog>
 <script src="app.js"></script>
 </body>

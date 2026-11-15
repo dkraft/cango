@@ -15,6 +15,7 @@ import struct
 import sys
 import threading
 from pathlib import Path
+from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cango_codec import encode_batch, encode_log, pack_frame
@@ -95,6 +96,17 @@ class State:
         self.rx = 0
         self.selftest_path = selftest_path
         self.selftest = None
+        self.card = {
+            "": [
+                {"name": "logs", "dir": True, "bytes": 0},
+                {"name": "projects", "dir": True, "bytes": 0},
+                {"name": "www", "dir": True, "bytes": 0},
+            ],
+            "logs": [{"name": "dealer", "dir": True, "bytes": 0}],
+            "logs/dealer": [{"name": "sample.cango", "dir": False, "bytes": len(SAMPLE_LOG)}],
+            "projects": [],
+            "www": [],
+        }
 
 
 STATE = None
@@ -135,6 +147,33 @@ def handle_op(msg):
             "ok": True,
             "logs": [{"name": "sample.cango", "kind": "dealer", "bytes": len(SAMPLE_LOG)}],
         }
+    if op == "list_dir":
+        path = msg.get("path") or ""
+        skip = int(msg.get("skip") or 0)
+        if path.startswith("/") or any(part in (".", "..") for part in path.split("/")):
+            return {"op": "list_dir", "ok": False, "error": "bad", "path": ""}
+        with STATE.lock:
+            entries = STATE.card.get(path)
+            page = None if entries is None else entries[skip:skip + 8]
+            more = False if entries is None else skip + 8 < len(entries)
+        if page is None:
+            return {"op": "list_dir", "ok": False, "error": "missing", "path": path}
+        return {"op": "list_dir", "ok": True, "path": path, "skip": skip, "entries": page, "more": more}
+    if op == "delete_path":
+        path = msg.get("path") or ""
+        if not path or path.startswith("/") or any(part in (".", "..") for part in path.split("/")):
+            return {"op": "delete_path", "ok": False, "error": "bad"}
+        if path == "projects/generic.json":
+            return {"op": "delete_path", "ok": False, "error": "rejected"}
+        parent, _, name = path.rpartition("/")
+        with STATE.lock:
+            entries = STATE.card.get(parent)
+            if entries is None or not any(entry["name"] == name for entry in entries):
+                return {"op": "delete_path", "ok": False, "error": "missing"}
+            STATE.card[parent] = [entry for entry in entries if entry["name"] != name]
+            for key in [key for key in STATE.card if key == path or key.startswith(path + "/")]:
+                del STATE.card[key]
+        return {"op": "delete_path", "ok": True}
     if op in ("capture_status", "status"):
         return status_obj()
     if op in ("discover", "run_action"):
@@ -380,6 +419,17 @@ class Handler(socketserver.BaseRequestHandler):
                 return
             if method == "GET" and target == "/logs/dealer/sample.cango":
                 send_http(conn, 200, SAMPLE_LOG, "application/octet-stream")
+                return
+            if method == "GET" and target.startswith("/sd/"):
+                rel = unquote(target[4:])
+                parent, _, name = rel.rpartition("/")
+                with STATE.lock:
+                    entries = STATE.card.get(parent, [])
+                    present = any(entry["name"] == name and not entry["dir"] for entry in entries)
+                if rel == "logs/dealer/sample.cango" and present:
+                    send_http(conn, 200, SAMPLE_LOG, "application/octet-stream")
+                else:
+                    send_http(conn, 404, "missing", "text/plain")
                 return
             if method == "GET" and target.startswith("/logs/"):
                 send_http(conn, 404, "missing", "text/plain")

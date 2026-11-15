@@ -11,16 +11,21 @@
 #include "nvs_flash.h"
 #include "sdmmc_cmd.h"
 
+#include "cango_path.h"
+
 #include <dirent.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 static const char *TAG = "storage";
 static nvs_handle_t s_nvs;
 
 static void seed_generic_project(void);
+static void ensure_card_layout(void);
 
 static void ensure_dir(const char *path)
 {
@@ -87,10 +92,7 @@ void storage_init(void)
         return;
     }
     g_app.sd_ok = true;
-    ensure_dir("/sdcard/www");
-    ensure_dir("/sdcard/projects");
-    ensure_dir("/sdcard/logs");
-    seed_generic_project();
+    ensure_card_layout();
     ESP_LOGI(TAG, "sd ready");
 }
 
@@ -117,6 +119,32 @@ static void seed_generic_project(void)
     }
     fwrite(body, 1, (size_t)n, f);
     fclose(f);
+}
+
+/* A blank card has none of the working folders. mkdir is enough when they already exist. */
+static void ensure_card_layout(void)
+{
+    ensure_dir("/sdcard/www");
+    ensure_dir("/sdcard/projects");
+    ensure_dir("/sdcard/logs");
+    seed_generic_project();
+}
+
+static bool dir_has_names(const char *path)
+{
+    DIR *d = opendir(path);
+    struct dirent *de;
+    if (d == NULL) {
+        return false;
+    }
+    while ((de = readdir(d)) != NULL) {
+        if (cango_path_name_ok(de->d_name)) {
+            closedir(d);
+            return true;
+        }
+    }
+    closedir(d);
+    return false;
 }
 
 void storage_load_mode(void)
@@ -266,6 +294,7 @@ bool storage_save_project(const cango_project_t *project)
     if (n < 0) {
         return false;
     }
+    ensure_dir("/sdcard/projects");
     snprintf(path, sizeof(path), "/sdcard/projects/%s.json", project->id);
     f = fopen(path, "w");
     if (f == NULL) {
@@ -452,12 +481,179 @@ int storage_logs_json(char *buf, int cap)
     return used;
 }
 
+#define CARD_PAGE 8
+#define CARD_CAP 96
+
+typedef struct {
+    char name[48];
+    bool dir;
+    long bytes;
+} card_ent_t;
+
+static int card_cmp(const void *a, const void *b)
+{
+    const card_ent_t *ea = a;
+    const card_ent_t *eb = b;
+    if (ea->dir != eb->dir) {
+        return ea->dir ? -1 : 1;
+    }
+    return strcmp(ea->name, eb->name);
+}
+
+int storage_dir_json(char *buf, int cap, const char *rel, int skip)
+{
+    char path[192];
+    card_ent_t *ents;
+    DIR *d;
+    struct dirent *de;
+    int count = 0;
+    int used;
+    int shown = 0;
+    int i;
+    bool more = false;
+    if (buf == NULL || cap < 64) {
+        return -1;
+    }
+    if (!g_app.sd_ok) {
+        return snprintf(buf, (size_t)cap, "{\"op\":\"list_dir\",\"ok\":false,\"error\":\"sd\",\"path\":\"\"}\n");
+    }
+    if (rel == NULL) {
+        rel = "";
+    }
+    if (skip < 0) {
+        skip = 0;
+    }
+    if (!cango_path_under(path, sizeof(path), "/sdcard", rel)) {
+        return snprintf(buf, (size_t)cap, "{\"op\":\"list_dir\",\"ok\":false,\"error\":\"bad\",\"path\":\"\"}\n");
+    }
+    if (rel[0] == '\0' && !dir_has_names(path)) {
+        ensure_card_layout();
+    }
+    ents = calloc(CARD_CAP, sizeof(*ents));
+    if (ents == NULL) {
+        return -1;
+    }
+    d = opendir(path);
+    if (d == NULL) {
+        free(ents);
+        return snprintf(buf, (size_t)cap,
+                        "{\"op\":\"list_dir\",\"ok\":false,\"error\":\"missing\",\"path\":\"%s\"}\n", rel);
+    }
+    while ((de = readdir(d)) != NULL) {
+        char child[224];
+        struct stat st;
+        if (!cango_path_name_ok(de->d_name)) {
+            continue;
+        }
+        if (!join_path(child, sizeof(child), path, de->d_name) || stat(child, &st) != 0) {
+            continue;
+        }
+        if (count >= CARD_CAP) {
+            break;
+        }
+        memcpy(ents[count].name, de->d_name, strlen(de->d_name) + 1);
+        ents[count].dir = S_ISDIR(st.st_mode);
+        ents[count].bytes = ents[count].dir ? 0 : (long)st.st_size;
+        count++;
+    }
+    closedir(d);
+    qsort(ents, (size_t)count, sizeof(*ents), card_cmp);
+    used = snprintf(buf, (size_t)cap,
+                    "{\"op\":\"list_dir\",\"ok\":true,\"path\":\"%s\",\"skip\":%d,\"entries\":[", rel, skip);
+    if (used < 0 || used >= cap) {
+        free(ents);
+        return -1;
+    }
+    for (i = skip; i < count && shown < CARD_PAGE; i++) {
+        int w = snprintf(buf + used, (size_t)(cap - used),
+                         "%s{\"name\":\"%s\",\"dir\":%s,\"bytes\":%ld}",
+                         shown ? "," : "", ents[i].name, ents[i].dir ? "true" : "false", ents[i].bytes);
+        if (w < 0 || used + w >= cap - 24) {
+            more = true;
+            break;
+        }
+        used += w;
+        shown++;
+    }
+    if (skip + shown < count) {
+        more = true;
+    }
+    free(ents);
+    {
+        int w = snprintf(buf + used, (size_t)(cap - used), "],\"more\":%s}\n", more ? "true" : "false");
+        if (w < 0 || used + w >= cap) {
+            return -1;
+        }
+        used += w;
+    }
+    return used;
+}
+
+static bool rm_tree(const char *path, int depth)
+{
+    struct stat st;
+    if (depth > 8 || stat(path, &st) != 0) {
+        return false;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        struct dirent *de;
+        if (d == NULL) {
+            return false;
+        }
+        while ((de = readdir(d)) != NULL) {
+            char child[224];
+            if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) {
+                continue;
+            }
+            if (!join_path(child, sizeof(child), path, de->d_name) || !rm_tree(child, depth + 1)) {
+                closedir(d);
+                return false;
+            }
+        }
+        closedir(d);
+        return rmdir(path) == 0;
+    }
+    return unlink(path) == 0;
+}
+
+const char *storage_delete_path(const char *rel)
+{
+    char path[192];
+    char open_dir[96];
+    struct stat st;
+    if (!g_app.sd_ok) {
+        return "sd";
+    }
+    if (rel == NULL || rel[0] == '\0') {
+        return "bad";
+    }
+    if (!cango_path_under(path, sizeof(path), "/sdcard", rel)) {
+        return "bad";
+    }
+    if (strcmp(path, "/sdcard") == 0 || strcmp(path, "/sdcard/projects/generic.json") == 0) {
+        return "rejected";
+    }
+    ctrl_capture_dir(open_dir, (int)sizeof(open_dir));
+    if (cango_path_hits(open_dir, path)) {
+        return "busy";
+    }
+    if (stat(path, &st) != 0) {
+        return "missing";
+    }
+    if (!rm_tree(path, 0)) {
+        return "bad";
+    }
+    return NULL;
+}
+
 FILE *storage_open_capture(uint32_t stamp, char *dir_out, int dir_cap)
 {
     char path[160];
     if (!g_app.sd_ok || dir_out == NULL || dir_cap < 24) {
         return NULL;
     }
+    ensure_dir("/sdcard/logs");
     snprintf(dir_out, (size_t)dir_cap, "/sdcard/logs/%" PRIu32, stamp);
     mkdir(dir_out, 0775);
     snprintf(path, sizeof(path), "%s/log.cango", dir_out);

@@ -19,6 +19,10 @@ bool storage_save_project(const cango_project_t *project);
 bool storage_delete_project(const char *id);
 int storage_projects_json(char *buf, int cap);
 int storage_logs_json(char *buf, int cap);
+/* rel is relative to /sdcard. skip pages the sorted names. */
+int storage_dir_json(char *buf, int cap, const char *rel, int skip);
+/* NULL on success. Otherwise sd, bad, missing, busy, or rejected. */
+const char *storage_delete_path(const char *rel);
 /* Creates /sdcard/logs/<stamp>/ and opens log.cango inside it. */
 FILE *storage_open_capture(uint32_t stamp, char *dir_out, int dir_cap);
 void storage_write_census(const char *log_path, const char *json);

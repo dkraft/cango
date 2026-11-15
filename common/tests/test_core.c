@@ -4,6 +4,7 @@
 #include "cango_gvret.h"
 #include "cango_log.h"
 #include "cango_mode.h"
+#include "cango_path.h"
 #include "cango_project.h"
 
 #include <stdio.h>
@@ -496,6 +497,27 @@ static void test_project(void)
     expect(cango_project_builtin("generic", &q) && cango_project_is_generic(q.id), "builtin generic");
 }
 
+static void test_path(void)
+{
+    char buf[64];
+    expect(cango_path_under(buf, sizeof(buf), "/sdcard", ""), "root");
+    expect(strcmp(buf, "/sdcard") == 0, "root text");
+    expect(cango_path_under(buf, sizeof(buf), "/sdcard", "logs/12"), "nested");
+    expect(strcmp(buf, "/sdcard/logs/12") == 0, "nested text");
+    expect(cango_path_under(buf, sizeof(buf), "/sdcard", "logs//12/"), "slashes");
+    expect(strcmp(buf, "/sdcard/logs/12") == 0, "collapsed");
+    expect(!cango_path_under(buf, sizeof(buf), "/sdcard", ".."), "dotdot");
+    expect(!cango_path_under(buf, sizeof(buf), "/sdcard", "logs/../../etc"), "escape");
+    expect(!cango_path_under(buf, sizeof(buf), "/sdcard", "/etc"), "absolute");
+    expect(!cango_path_under(buf, sizeof(buf), "/sdcard", "a\\b"), "backslash");
+    expect(!cango_path_name_ok("..") && cango_path_name_ok("log.cango"), "names");
+    expect(cango_path_hits("/sdcard/logs/1", "/sdcard/logs/1"), "same");
+    expect(cango_path_hits("/sdcard/logs/1", "/sdcard/logs/1/log.cango"), "child");
+    expect(cango_path_hits("/sdcard/logs/1", "/sdcard/logs"), "parent");
+    expect(!cango_path_hits("/sdcard/logs/1", "/sdcard/logs/10"), "prefix");
+    expect(!cango_path_hits("", "/sdcard/logs"), "idle");
+}
+
 int main(void)
 {
     test_log();
@@ -507,6 +529,7 @@ int main(void)
     test_startup();
     test_both();
     test_project();
+    test_path();
     if (g_fail) {
         fprintf(stderr, "%d failed\n", g_fail);
         return 1;

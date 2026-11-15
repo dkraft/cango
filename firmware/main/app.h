@@ -70,6 +70,8 @@ void ble_mode_stop(void);
 bool ble_link_up(void);
 void ctrl_start(void);
 void ctrl_boot_release(void);
+/* Copies the open capture directory, or writes an empty string. */
+void ctrl_capture_dir(char *out, int cap);
 void wifi_offer_frame(const cango_frame_t *frame);
 void ble_offer_frame(const cango_frame_t *frame);
 void ble_heard_reset(void);

@@ -7,6 +7,7 @@ idf_component_register(
         "src/cango_gvret.c"
         "src/cango_log.c"
         "src/cango_mode.c"
+        "src/cango_path.c"
         "src/cango_project.c"
     INCLUDE_DIRS "include"
 )

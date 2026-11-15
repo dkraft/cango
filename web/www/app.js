@@ -10,6 +10,9 @@ let armed = false;
 let sentFilter = 0;
 let gotHello = false;
 let holdArmedUntil = 0;
+let cardPath = "";
+let cardSkip = 0;
+let pendingDelete = "";
 
 function blankFilter() {
   return { mode: "all", ids: [], from: null, to: null };
@@ -288,17 +291,67 @@ function showProjects(msg) {
   paintArmed();
 }
 
-function showLogs(msg) {
-  const list = document.querySelector("#log-list");
-  list.replaceChildren();
-  (msg.logs || []).forEach((log) => {
+function cardRel(name) {
+  return cardPath ? cardPath + "/" + name : name;
+}
+
+function requestCard() {
+  send({ op: "list_dir", path: cardPath, skip: cardSkip });
+}
+
+function showFiles(msg) {
+  const list = document.querySelector("#file-list");
+  if (!msg.ok) {
+    if ((msg.path || "") === cardPath) {
+      list.replaceChildren();
+      document.querySelector("#file-more").hidden = true;
+    }
+    return;
+  }
+  if ((msg.path || "") !== cardPath || msg.skip !== cardSkip) {
+    return;
+  }
+  if (msg.skip === 0) {
+    list.replaceChildren();
+  }
+  (msg.entries || []).forEach((entry) => {
     const li = document.createElement("li");
-    const a = document.createElement("a");
-    a.href = "/logs/" + log.kind + "/" + log.name;
-    a.textContent = log.kind + "/" + log.name + " (" + log.bytes + " B)";
-    li.appendChild(a);
+    if (entry.dir) {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "enter";
+      open.textContent = entry.name + "/";
+      open.addEventListener("click", () => {
+        cardPath = cardRel(entry.name);
+        cardSkip = 0;
+        requestCard();
+      });
+      li.appendChild(open);
+    } else {
+      const a = document.createElement("a");
+      a.href = "/sd/" + cardRel(entry.name).split("/").map(encodeURIComponent).join("/");
+      a.textContent = entry.name;
+      li.appendChild(a);
+      const size = document.createElement("span");
+      size.className = "bytes";
+      size.textContent = String(entry.bytes);
+      li.appendChild(size);
+    }
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.className = "drop";
+    drop.setAttribute("aria-label", "Delete");
+    drop.textContent = "×";
+    drop.addEventListener("click", () => {
+      pendingDelete = cardRel(entry.name);
+      document.querySelector("#file-delete-name").textContent = pendingDelete;
+      document.querySelector("#file-sheet").showModal();
+    });
+    li.appendChild(drop);
     list.appendChild(li);
   });
+  document.querySelector("#file-path").textContent = cardPath;
+  document.querySelector("#file-more").hidden = !msg.more;
 }
 
 function showWifi(msg) {
@@ -347,8 +400,8 @@ function onJson(msg) {
     paintStatus(msg);
   } else if (msg.op === "get_projects") {
     showProjects(msg);
-  } else if (msg.op === "list_logs") {
-    showLogs(msg);
+  } else if (msg.op === "list_dir") {
+    showFiles(msg);
   } else if (msg.op === "get_wifi") {
     showWifi(msg);
   } else if (msg.op === "arm_tx") {
@@ -377,7 +430,7 @@ function connect() {
   ws.onopen = () => {
     send({ op: "hello" });
     send({ op: "get_projects" });
-    send({ op: "list_logs" });
+    send({ op: "list_dir", path: "", skip: 0 });
     send({ op: "get_wifi" });
     send({ op: "status" });
   };
@@ -464,6 +517,29 @@ async function runSelfTest() {
     const log = await fetch("/logs/dealer/sample.cango");
     const buf = new Uint8Array(await log.arrayBuffer());
     checks.logDownload = log.ok && buf[0] === 0x43 && buf[1] === 0x47 && buf[2] === 0x30 && buf[3] === 0x31;
+    checks.files = document.querySelector("#file-list") !== null && document.querySelector("#file-up") !== null && document.querySelector("#file-sheet") !== null;
+    const enterNamed = (label) => {
+      const node = [...document.querySelectorAll("#file-list .enter")].find((item) => item.textContent === label);
+      if (!node) {
+        throw new Error(label);
+      }
+      node.click();
+    };
+    await waitFor(() => document.querySelector("#file-list .enter") !== null, 3000);
+    enterNamed("logs/");
+    await waitFor(() => document.querySelector("#file-path").textContent === "logs", 2000);
+    enterNamed("dealer/");
+    await waitFor(() => document.querySelector("#file-path").textContent === "logs/dealer", 2000);
+    const fileLink = document.querySelector("#file-list a");
+    checks.fileLink = fileLink !== null && fileLink.getAttribute("href") === "/sd/logs/dealer/sample.cango" && fileLink.textContent === "sample.cango";
+    const sd = await fetch("/sd/logs/dealer/sample.cango");
+    const sdBuf = new Uint8Array(await sd.arrayBuffer());
+    checks.sdDownload = sd.ok && sdBuf[0] === 0x43 && sdBuf[1] === 0x47;
+    document.querySelector("#file-list .drop").click();
+    checks.deleteOpen = document.querySelector("#file-sheet").open === true;
+    document.querySelector("#file-delete").click();
+    await waitFor(() => document.querySelector("#file-list a") === null && document.querySelector("#file-sheet").open === false, 2000);
+    checks.deleted = true;
     checks.noDeviceFilter = sentFilter === 0;
     checks.help = document.querySelector("#help") !== null && document.querySelector("#help-sheet") !== null;
     document.querySelector("#add-vehicle").click();
@@ -615,7 +691,35 @@ document.querySelector("#save-project").addEventListener("click", () => {
     min_free_mb: 64,
   });
 });
-document.querySelector("#reload-logs").addEventListener("click", () => send({ op: "list_logs" }));
+document.querySelector("#file-up").addEventListener("click", () => {
+  const cut = cardPath.lastIndexOf("/");
+  cardPath = cut < 0 ? "" : cardPath.slice(0, cut);
+  cardSkip = 0;
+  requestCard();
+});
+document.querySelector("#file-refresh").addEventListener("click", () => {
+  cardSkip = 0;
+  requestCard();
+});
+document.querySelector("#file-more").addEventListener("click", () => {
+  cardSkip = document.querySelectorAll("#file-list li").length;
+  requestCard();
+});
+document.querySelector("#file-delete").addEventListener("click", () => {
+  const rel = pendingDelete;
+  pendingDelete = "";
+  document.querySelector("#file-sheet").close();
+  if (!rel) {
+    return;
+  }
+  send({ op: "delete_path", path: rel });
+  cardSkip = 0;
+  requestCard();
+});
+document.querySelector("#file-delete-close").addEventListener("click", () => {
+  pendingDelete = "";
+  document.querySelector("#file-sheet").close();
+});
 document.querySelector("#confirm-arm").addEventListener("change", paintArmed);
 document.querySelector("#arm").addEventListener("click", () => {
   if (!document.querySelector("#confirm-arm").checked) {
