@@ -46,23 +46,6 @@
       </div>
     </section>
     <section>
-      <h2>Capture</h2>
-      <p class="note">Default profile is dealer. Saving here does not switch the radio. A bus with no tester stays purple until a dealer session is seen and then goes quiet.</p>
-      <label>Profile
-        <select id="profile">
-          <option value="dealer" selected>dealer</option>
-          <option value="startup">startup</option>
-          <option value="both">both</option>
-        </select>
-      </label>
-      <label>Startup max s <input id="startup-max" type="number" min="1" value="60"></label>
-      <label>Startup quiet s <input id="startup-quiet" type="number" min="0" value="3"></label>
-      <label>Dealer quiet s <input id="dealer-quiet" type="number" min="1" value="5"></label>
-      <label>Dealer context s <input id="dealer-context" type="number" min="0" value="5"></label>
-      <label>User events to complete <input id="user-events" type="number" min="0" value="0"></label>
-      <button id="save-capture" type="button">Save profile</button>
-    </section>
-    <section>
       <h2>Project</h2>
       <p class="note">A new tab opens Generic. Generic cannot be overwritten or deleted.</p>
       <label>Applied
@@ -80,7 +63,7 @@
     </section>
     <section>
       <h2>Logs</h2>
-      <p class="note">Files download over HTTP. BLE does not carry logs. Long-press BOOT until the LED flashes green, then open this page.</p>
+      <p class="note">An SD card logs 30 seconds when capture mode starts. A short BOOT press starts another 30 seconds in a new folder. Purple flashes while the file is open, then stays solid. Long-press until green, then open this page.</p>
       <ul id="log-list"></ul>
       <button id="reload-logs" type="button">Refresh</button>
     </section>

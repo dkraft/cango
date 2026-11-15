@@ -20,7 +20,7 @@ A frame is `t_us u32`, `id u32`, `flags u8`, `len u8`, `data[8]`, `reserved u16`
 
 ## Link
 
-WebSocket path `/ws`. Text frames are JSON. Binary frames are batches. `GET /logs/<kind>/<file>` downloads a log. Kinds are `startup`, `dealer`, and `manual`. The web files live on the card at `/www`.
+WebSocket path `/ws`. Text frames are JSON. Binary frames are batches. `GET /logs/<folder>/<file>` downloads a log. Each capture is a folder under `/logs` containing `log.cango` and `log.json`. The web files live on the card at `/www`.
 
 The page keeps one view filter per tab and does not send `set_filter`. The firmware has a single WiFi filter, so a device-wide filter would starve every tab. BLE does send `set_filter`, because that link cannot carry a busy bus. Capture files ignore both filters.
 
@@ -28,11 +28,11 @@ The page keeps one view filter per tab and does not send `set_filter`. The firmw
 
 `hello` returns version, mode, and AP name.
 
-`status` and `capture_status` return `bus_status`: state, tec, rec, rx, missed, dropped, sd, capture (`idle`, `running`, `complete`), mode, bitrate, listen_only, armed, profile, project, ap, sta. The device also pushes this about once a second.
+`status` and `capture_status` return `bus_status`: state, tec, rec, rx, missed, dropped, sd, capture (`idle`, `running`, `complete`), mode, bitrate, listen_only, armed, profile (`30s`), project, ap, sta. `running` is the open 30 second file. `complete` is capture mode after that file has closed. The device also pushes this about once a second.
 
-`get_projects`, `put_project`, `delete_project`, `apply_project`. `put_project` carries the project fields beside `op`. `id` `generic` is rejected. Apply loads Generic or `zero-xb` from firmware when the card has no file for that id. A named file on the card overrides the built-in. An unknown id with no file returns `missing`. It does not reopen a capture that is already running. `zero-xb` is listen-only, dealer capture, 500 kbit/s as the first listen, and an empty allow list.
+`get_projects`, `put_project`, `delete_project`, `apply_project`. `put_project` carries the project fields beside `op`. `id` `generic` is rejected. Apply loads Generic or `zero-xb` from firmware when the card has no file for that id. A named file on the card overrides the built-in. An unknown id with no file returns `missing`. It does not reopen a capture that is already running. `zero-xb` is listen-only, 500 kbit/s as the first listen, and an empty allow list. Recording it is the same 30 second window as any other project.
 
-`set_capture` takes `profile` (`dealer`, `startup`, `both`) and optional seconds: `startup_max_s`, `startup_quiet_s`, `dealer_quiet_s`, `dealer_context_s`, `complete_on_user_events`. The value is stored on the device. A named project file is updated. Generic is not rewritten.
+`set_capture` returns ok and does not change the window. Capture is 30 seconds of every frame when a card is mounted. A short BOOT press in capture mode starts a new folder.
 
 `set_filter` takes `active`, decimal `id` and `mask`, `extended` (`any`, `std`, `ext`), `change_only`, and `min_interval_ms`.
 
@@ -44,4 +44,4 @@ The page keeps one view filter per tab and does not send `set_filter`. The firmw
 
 `discover` and `run_action` return `{ok:false, error:not_implemented}`.
 
-`list_logs` returns `{name, kind, bytes}` for files under the three log directories.
+`list_logs` returns `{name, kind, bytes}`. `kind` is the capture folder name.

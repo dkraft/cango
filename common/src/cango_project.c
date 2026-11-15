@@ -96,7 +96,8 @@ bool cango_project_is_generic(const char *id)
     return id != NULL && strcmp(id, "generic") == 0;
 }
 
-/* 74 V light platform. The bus rate is not published; 500 kbit is the first listen. */
+/* 74 V light platform. The bus rate is not published; 500 kbit is the first listen.
+ * The 30 second log window is firmware policy and does not read this profile. */
 static void fill_zero_xb(cango_project_t *p)
 {
     cango_project_generic(p);

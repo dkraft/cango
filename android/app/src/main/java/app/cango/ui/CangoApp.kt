@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -49,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.cango.BleSession
 import app.cango.CanFrame
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 /** Same charcoal as the system device-details screen. */
@@ -91,20 +93,32 @@ private val LedBlue = Color(0xFF3D7BFF)
 private val LedGreen = Color(0xFF3DDC6A)
 private val LedPurple = Color(0xFFC45CFF)
 
-/** Dealer, BLE, and WiFi, in the same colors as the board LED. */
+/** Capture, BLE, and WiFi, in the same colors as the board LED. */
 @Composable
 private fun LedStatus(mode: String, capture: String) {
-    val dealer = when {
-        mode == "capture" && capture == "complete" -> Color.White
-        mode == "capture" -> LedPurple
-        else -> LedOff
+    val logging = mode == "capture" && capture == "running"
+    var on by remember { mutableStateOf(true) }
+    LaunchedEffect(logging) {
+        if (!logging) {
+            on = true
+            return@LaunchedEffect
+        }
+        while (true) {
+            on = !on
+            delay(150)
+        }
+    }
+    val captureColor = when {
+        mode != "capture" -> LedOff
+        logging && !on -> LedOff
+        else -> LedPurple
     }
     Row(
         Modifier.fillMaxWidth().padding(bottom = 8.dp),
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Glyph("Dealer", dealer) { dealerGlyph(it) }
+        Glyph("Capture", captureColor) { dealerGlyph(it) }
         Glyph("BLE", if (mode == "ble") LedBlue else LedOff) { bleGlyph(it) }
         Glyph("WiFi", if (mode == "wifi") LedGreen else LedOff) { wifiGlyph(it) }
     }
@@ -198,7 +212,6 @@ fun CangoApp() {
     val context = LocalContext.current
     var mode by remember { mutableStateOf("") }
     var capture by remember { mutableStateOf("idle") }
-    var profile by remember { mutableStateOf("dealer") }
     var project by remember { mutableStateOf("generic") }
     var picker by remember { mutableStateOf(false) }
     var armed by remember { mutableStateOf(false) }
@@ -208,7 +221,6 @@ fun CangoApp() {
     var filterMask by remember { mutableStateOf("7FF") }
     var sendId by remember { mutableStateOf("123") }
     var sendData by remember { mutableStateOf("") }
-    var quiet by remember { mutableStateOf("5") }
     val frames = remember { mutableStateListOf<CanFrame>() }
     val session = remember {
         BleSession(
@@ -224,7 +236,6 @@ fun CangoApp() {
                 val obj = JSONObject(line)
                 if (obj.optString("op") == "bus_status") {
                     armed = obj.optBoolean("armed")
-                    profile = obj.optString("profile", profile)
                     project = obj.optString("project", project)
                     capture = obj.optString("capture", capture)
                     val reported = obj.optString("mode")
@@ -255,9 +266,8 @@ fun CangoApp() {
                 permission.launch(needed)
             }) { Text("Scan", color = Color.White) }
             WhiteButton(onClick = { screen = 0 }) { Text("Live", color = Color.White) }
-            WhiteButton(onClick = { screen = 1 }) { Text("Capture", color = Color.White) }
-            WhiteButton(onClick = { screen = 2 }) { Text("Inject", color = Color.White) }
-            WhiteButton(onClick = { screen = 3 }) { Text("Logs", color = Color.White) }
+            WhiteButton(onClick = { screen = 1 }) { Text("Inject", color = Color.White) }
+            WhiteButton(onClick = { screen = 2 }) { Text("Logs", color = Color.White) }
         }
         when (screen) {
             0 -> {
@@ -273,15 +283,6 @@ fun CangoApp() {
                 }
             }
             1 -> {
-                Text("Default is dealer. This does not start WiFi or stop BLE.", color = Color.White)
-                OutlinedTextField(profile, { profile = it }, label = { Text("dealer, startup, or both", color = Color.White) }, colors = fieldColors())
-                OutlinedTextField(quiet, { quiet = it }, label = { Text("Dealer quiet s", color = Color.White) }, colors = fieldColors())
-                WhiteButton(onClick = {
-                    if (profile != "dealer" && profile != "startup" && profile != "both") return@WhiteButton
-                    session.send("""{"op":"set_capture","profile":"$profile","dealer_quiet_s":${quiet.toIntOrNull() ?: 5}}""")
-                }) { Text("Save profile", color = Color.White) }
-            }
-            2 -> {
                 Row {
                     Checkbox(confirm, { confirm = it })
                     Text("I intend to transmit on this bus", color = Color.White)
@@ -298,7 +299,7 @@ fun CangoApp() {
                 Text("Empty allow list rejects every id. Arm lasts 60 seconds.", color = Color.White)
             }
             else -> {
-                Text("Logs stay on the SD card. Long-press BOOT until the LED flashes green, join CANGO-XXXX, and download from the page. BLE does not carry log files.", color = Color.White)
+                Text("A short BOOT press in capture mode records 30 seconds in a new folder. Purple flashes while it writes, then stays solid. Long-press until green to download over WiFi.", color = Color.White)
                 WhiteButton(onClick = { session.send("""{"op":"list_logs"}""") }) { Text("List names", color = Color.White) }
             }
         }
@@ -324,7 +325,6 @@ fun CangoApp() {
                     onClick = {
                         session.send("""{"op":"apply_project","id":"zero-xb"}""")
                         project = "zero-xb"
-                        profile = "dealer"
                         picker = false
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = Color.White),

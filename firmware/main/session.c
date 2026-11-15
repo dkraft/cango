@@ -131,8 +131,10 @@ void session_status(char *out, int cap)
 {
     const char *cap_state = "idle";
     app_lock();
-    if (g_app.mode == CANGO_MODE_CAPTURE) {
-        cap_state = ctrl_capture_complete() ? "complete" : "running";
+    if (ctrl_capture_running()) {
+        cap_state = "running";
+    } else if (g_app.mode == CANGO_MODE_CAPTURE && ctrl_capture_complete()) {
+        cap_state = "complete";
     }
     snprintf(out, (size_t)cap,
              "{\"op\":\"bus_status\",\"state\":\"%s\",\"tec\":%" PRIu32 ",\"rec\":%" PRIu32
@@ -143,8 +145,7 @@ void session_status(char *out, int cap)
              g_app.bus_state, g_app.tec, g_app.rec, g_app.rx_count, g_app.missed, g_app.dropped,
              g_app.sd_ok ? "true" : "false", cap_state, mode_name(g_app.mode), g_app.bitrate,
              g_app.listen_only ? "true" : "false", g_app.armed ? "true" : "false",
-             g_app.logging.profile == CANGO_PROFILE_STARTUP ? "startup" :
-             g_app.logging.profile == CANGO_PROFILE_BOTH ? "both" : "dealer",
+             "30s",
              g_app.project.id[0] ? g_app.project.id : "generic",
              g_app.ap_ssid, g_app.sta_up ? "true" : "false");
     app_unlock();
@@ -153,26 +154,6 @@ void session_status(char *out, int cap)
 static cango_filter_t *link_filter(int link)
 {
     return link == LINK_BLE ? &g_app.ble_filter : &g_app.wifi_filter;
-}
-
-static void apply_logging_numbers(const char *json)
-{
-    uint32_t n;
-    if (grab_u32(json, "startup_max_s", &n)) {
-        g_app.logging.startup_max_us = n * 1000000u;
-    }
-    if (grab_u32(json, "startup_quiet_s", &n)) {
-        g_app.logging.startup_quiet_us = n * 1000000u;
-    }
-    if (grab_u32(json, "dealer_quiet_s", &n)) {
-        g_app.logging.dealer_quiet_us = n * 1000000u;
-    }
-    if (grab_u32(json, "dealer_context_s", &n)) {
-        g_app.logging.dealer_context_us = n * 1000000u;
-    }
-    if (grab_u32(json, "complete_on_user_events", &n)) {
-        g_app.logging.complete_on_user_events = n;
-    }
 }
 
 int session_handle(const char *json, char *out, int cap, int link)
@@ -234,27 +215,6 @@ int session_handle(const char *json, char *out, int cap, int link)
         return reply(out, cap, "{\"op\":\"set_filter\",\"ok\":true}\n");
     }
     if (strcmp(op, "set_capture") == 0) {
-        char profile[16];
-        app_lock();
-        if (grab_str(json, "profile", profile, sizeof(profile))) {
-            if (strcmp(profile, "startup") == 0) {
-                g_app.logging.profile = CANGO_PROFILE_STARTUP;
-            } else if (strcmp(profile, "both") == 0) {
-                g_app.logging.profile = CANGO_PROFILE_BOTH;
-            } else if (strcmp(profile, "dealer") == 0) {
-                g_app.logging.profile = CANGO_PROFILE_DEALER;
-            } else {
-                app_unlock();
-                return reply(out, cap, "{\"op\":\"set_capture\",\"ok\":false,\"error\":\"bad_profile\"}\n");
-            }
-        }
-        apply_logging_numbers(json);
-        g_app.project.logging = g_app.logging;
-        app_unlock();
-        storage_save_logging();
-        if (!cango_project_is_generic(g_app.project.id)) {
-            storage_save_project(&g_app.project);
-        }
         return reply(out, cap, "{\"op\":\"set_capture\",\"ok\":true}\n");
     }
     if (strcmp(op, "put_project") == 0) {

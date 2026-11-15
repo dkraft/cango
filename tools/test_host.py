@@ -220,8 +220,8 @@ def main():
             print("FAIL log download")
             return 1
         page = urllib.request.urlopen("http://127.0.0.1:%d/" % port).read()
-        if b"id=\"profile\"" not in page or b"dealer" not in page:
-            print("FAIL page")
+        if b"id=\"profile\"" in page or b"id=\"save-capture\"" in page:
+            print("FAIL capture config still on page")
             return 1
         if not ws_client(port):
             return 1

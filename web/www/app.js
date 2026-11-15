@@ -7,9 +7,7 @@ let ws = null;
 let tabs = [];
 let active = 0;
 let armed = false;
-let profileBound = false;
 let sentFilter = 0;
-let captureSave = null;
 let gotHello = false;
 let holdArmedUntil = 0;
 
@@ -221,13 +219,6 @@ function paintStatus(msg) {
   if (Date.now() >= holdArmedUntil) {
     armed = !!msg.armed;
   }
-  if (!profileBound && msg.profile) {
-    const sel = document.querySelector("#profile");
-    if ([...sel.options].some((opt) => opt.value === msg.profile)) {
-      sel.value = msg.profile;
-    }
-    profileBound = true;
-  }
   paintArmed();
 }
 
@@ -267,18 +258,6 @@ function showWifi(msg) {
       document.querySelector("#wifi" + entry.slot + "-pass").value = entry.password || "";
     }
   });
-}
-
-function loggingPayload() {
-  return {
-    capture_profile: document.querySelector("#profile").value,
-    startup_max_s: num("#startup-max"),
-    startup_quiet_s: num("#startup-quiet"),
-    dealer_quiet_s: num("#dealer-quiet"),
-    dealer_context_s: num("#dealer-context"),
-    complete_on_user_events: num("#user-events"),
-    min_free_mb: 64,
-  };
 }
 
 function decodeBatch(buffer) {
@@ -322,11 +301,6 @@ function onJson(msg) {
     showLogs(msg);
   } else if (msg.op === "get_wifi") {
     showWifi(msg);
-  } else if (msg.op === "set_capture") {
-    if (captureSave) {
-      captureSave.ok = !!msg.ok;
-    }
-    note(msg.ok ? "Capture profile saved" : "Capture profile rejected");
   } else if (msg.op === "arm_tx") {
     if (msg.ok) {
       armed = true;
@@ -403,7 +377,7 @@ async function runSelfTest() {
   let error = "";
   try {
     await waitFor(() => gotHello, 3000);
-    checks.profileDefault = document.querySelector("#profile").value === "dealer";
+    checks.noCaptureConfig = document.querySelector("#profile") === null && document.querySelector("#save-capture") === null;
     checks.modulesDisabled = document.querySelector("#find-modules").disabled;
     checks.noRunAction = document.querySelector("#run-action") === null;
     checks.addVehicle = document.querySelector("#add-vehicle") !== null;
@@ -431,10 +405,6 @@ async function runSelfTest() {
     document.querySelector("#tab-1").click();
     const ids1 = [...document.querySelectorAll("#rows td:nth-child(2)")];
     checks.tab1Visible = ids1.length > 0 && ids1.every((cell) => cell.textContent === "200");
-    document.querySelector("#profile").value = "startup";
-    document.querySelector("#save-capture").click();
-    await waitFor(() => captureSave && captureSave.ok && captureSave.profile === "startup", 2000);
-    checks.savedStartup = true;
     document.querySelector("#confirm-arm").checked = true;
     document.querySelector("#confirm-arm").dispatchEvent(new Event("change"));
     document.querySelector("#arm").click();
@@ -483,19 +453,6 @@ document.querySelector("#clear-filter").addEventListener("click", () => {
   writeFilterForm(tabs[active].filter);
   renderRows();
 });
-document.querySelector("#save-capture").addEventListener("click", () => {
-  const profile = document.querySelector("#profile").value;
-  captureSave = { profile, ok: false };
-  send({
-    op: "set_capture",
-    profile,
-    startup_max_s: num("#startup-max"),
-    startup_quiet_s: num("#startup-quiet"),
-    dealer_quiet_s: num("#dealer-quiet"),
-    dealer_context_s: num("#dealer-context"),
-    complete_on_user_events: num("#user-events"),
-  });
-});
 document.querySelector("#apply-project").addEventListener("click", () => {
   send({ op: "apply_project", id: document.querySelector("#project").value });
 });
@@ -529,7 +486,6 @@ document.querySelector("#save-project").addEventListener("click", () => {
     name: document.querySelector("#new-name").value.trim() || id,
     bitrate: num("#new-bitrate"),
     listen_only: true,
-    logging: loggingPayload(),
     tx_allow: allowList(document.querySelector("#new-allow").value),
     min_free_mb: 64,
   });

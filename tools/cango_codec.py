@@ -6,7 +6,7 @@ FRAME_BYTES = 20
 BATCH_HDR = 6
 HEADER_BYTES = 64
 
-PROFILE_NAME = {0: "dealer", 1: "startup", 2: "both", 3: "manual"}
+PROFILE_NAME = {0: "dealer", 1: "startup", 2: "both", 3: "manual", 4: "window"}
 MARKER_NAME = {
     1: "startup_begin",
     2: "startup_end",

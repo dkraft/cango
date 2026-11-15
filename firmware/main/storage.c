@@ -90,9 +90,6 @@ void storage_init(void)
     ensure_dir("/sdcard/www");
     ensure_dir("/sdcard/projects");
     ensure_dir("/sdcard/logs");
-    ensure_dir("/sdcard/logs/startup");
-    ensure_dir("/sdcard/logs/dealer");
-    ensure_dir("/sdcard/logs/manual");
     seed_generic_project();
     ESP_LOGI(TAG, "sd ready");
 }
@@ -420,15 +417,32 @@ static int append_dir(char *buf, int cap, int used, int *count, const char *dir,
 
 int storage_logs_json(char *buf, int cap)
 {
+    DIR *d;
+    struct dirent *de;
     int used;
     int count = 0;
     used = snprintf(buf, (size_t)cap, "{\"op\":\"list_logs\",\"ok\":true,\"logs\":[");
     if (used < 0) {
         return -1;
     }
-    used = append_dir(buf, cap, used, &count, "/sdcard/logs/dealer", "dealer");
-    used = append_dir(buf, cap, used, &count, "/sdcard/logs/startup", "startup");
-    used = append_dir(buf, cap, used, &count, "/sdcard/logs/manual", "manual");
+    d = g_app.sd_ok ? opendir("/sdcard/logs") : NULL;
+    if (d != NULL) {
+        while ((de = readdir(d)) != NULL) {
+            char path[128];
+            struct stat st;
+            if (de->d_name[0] == '.') {
+                continue;
+            }
+            if (!join_path(path, sizeof(path), "/sdcard/logs", de->d_name)) {
+                continue;
+            }
+            if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+                continue;
+            }
+            used = append_dir(buf, cap, used, &count, path, de->d_name);
+        }
+        closedir(d);
+    }
     if (used + 3 >= cap) {
         return -1;
     }
@@ -438,15 +452,16 @@ int storage_logs_json(char *buf, int cap)
     return used;
 }
 
-FILE *storage_open_log(const char *dir, uint32_t stamp, char *path_out, int path_cap)
+FILE *storage_open_capture(uint32_t stamp, char *dir_out, int dir_cap)
 {
-    FILE *f;
-    if (!g_app.sd_ok) {
+    char path[160];
+    if (!g_app.sd_ok || dir_out == NULL || dir_cap < 24) {
         return NULL;
     }
-    snprintf(path_out, (size_t)path_cap, "%s/%" PRIu32 ".cango", dir, stamp);
-    f = fopen(path_out, "wb");
-    return f;
+    snprintf(dir_out, (size_t)dir_cap, "/sdcard/logs/%" PRIu32, stamp);
+    mkdir(dir_out, 0775);
+    snprintf(path, sizeof(path), "%s/log.cango", dir_out);
+    return fopen(path, "wb");
 }
 
 void storage_write_census(const char *log_path, const char *json)

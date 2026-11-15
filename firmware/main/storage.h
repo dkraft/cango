@@ -19,7 +19,8 @@ bool storage_save_project(const cango_project_t *project);
 bool storage_delete_project(const char *id);
 int storage_projects_json(char *buf, int cap);
 int storage_logs_json(char *buf, int cap);
-FILE *storage_open_log(const char *dir, uint32_t stamp, char *path_out, int path_cap);
+/* Creates /sdcard/logs/<stamp>/ and opens log.cango inside it. */
+FILE *storage_open_capture(uint32_t stamp, char *dir_out, int dir_cap);
 void storage_write_census(const char *log_path, const char *json);
 
 #endif

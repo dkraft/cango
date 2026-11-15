@@ -13,7 +13,7 @@ idf.py -C firmware -p /dev/ttyUSB0 flash monitor
 
 `firmware/sdkconfig.defaults` selects ESP32, 4 MB QIO flash, the custom partition table, NimBLE peripheral, and the HTTP WebSocket server. `menuconfig` may rename a symbol if the IDF minor version differs. There is no OTA partition: nvs, phy_init, and a 3 MB factory app.
 
-Copy `web/www` onto the card as `/www` (`index.html`, `app.js`, `style.css`). Projects go in `/projects`. Logs appear under `/logs/startup`, `/logs/dealer`, and `/logs/manual`. If `index.html` is missing, the device serves a short fallback page.
+Copy `web/www` onto the card as `/www` (`index.html`, `app.js`, `style.css`). Projects go in `/projects`. Each capture is `/logs/<stamp>/log.cango` plus `log.json`. If `index.html` is missing, the device serves a short fallback page.
 
 ## Page without the board
 
@@ -25,7 +25,7 @@ Open `http://127.0.0.1:8765/`. The simulator emits ids `0x100`, `0x200`, and `0x
 
 ## Android
 
-`android/` is Kotlin and Compose, min SDK 26, version 0.1.4. From that directory, `./gradlew assembleRelease` writes `app/build/outputs/apk/release/app-release.apk`. If `keystore.properties` is absent, the release build is signed with the debug key. The codec bytes match `common/` and `tools/test_host.py` checks the firmware UUID constants. The installable APK is attached to the GitHub release. Open that app and tap Scan while the LED flashes blue. The system Bluetooth page does not open the link.
+`android/` is Kotlin and Compose, min SDK 26, version 0.1.5. From that directory, `./gradlew assembleRelease` writes `app/build/outputs/apk/release/app-release.apk`. If `keystore.properties` is absent, the release build is signed with the debug key. The codec bytes match `common/` and `tools/test_host.py` checks the firmware UUID constants. The installable APK is attached to the GitHub release. Open that app and tap Scan while the LED flashes blue. The system Bluetooth page does not open the link.
 
 ## Log text
 

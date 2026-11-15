@@ -30,6 +30,7 @@
 #define CANGO_PROFILE_STARTUP 1
 #define CANGO_PROFILE_BOTH 2
 #define CANGO_PROFILE_MANUAL 3
+#define CANGO_PROFILE_WINDOW 4
 
 typedef int (*cango_write_fn)(void *ctx, const void *data, size_t len);
 

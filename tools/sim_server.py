@@ -116,7 +116,7 @@ def status_obj():
             "bitrate": 500000,
             "listen_only": not STATE.armed,
             "armed": STATE.armed,
-            "profile": STATE.profile,
+            "profile": "30s",
             "project": STATE.project,
             "ap": "CANGO-SIM",
             "sta": False,

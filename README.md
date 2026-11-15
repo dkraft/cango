@@ -7,28 +7,28 @@ The BOOT button, after the red startup flash, is the only mode switch. Modes are
 | LED | meaning |
 | --- | --- |
 | red flash | startup, button ignored |
-| purple | capture running |
-| white | capture complete |
+| purple flash | capture writing, 30 seconds |
+| purple solid | capture mode, file closed |
 | blue flash | BLE, waiting for a phone |
 | blue solid | BLE phone linked |
 | green flash | WiFi access point, station not associated |
 | green solid | station has an address |
 
-Short press (release before 600 ms) writes a user event into the open log and flushes it. From a completed capture it opens `/logs/manual/<stamp>.cango`, writes one event, and closes it. Long press (800 ms, once per hold) cycles capture, BLE, WiFi. The gap between 600 and 800 ms is ignored. The last mode is restored from NVS. A first boot with no key starts a new capture.
+Long press (800 ms, once per hold) cycles capture, BLE, WiFi. The gap between 600 and 800 ms is ignored. The last mode is restored from NVS. A first boot with no key starts in capture.
 
-The default capture profile is `dealer`. The page or the app can change it to `startup` or `both`. They do not turn the radios on. Dealer capture stays purple until a tester session is seen and then goes quiet, and it keeps a few seconds of prior traffic instead of the whole wait. A bus with no tester stays purple on purpose. The file is raw ISO-TP plus surrounding frames, for a person to study later.
+A mounted SD card is the request to log. Entering capture mode opens one folder and writes every frame for 30 seconds. A short press (release before 600 ms) while the LED is purple closes that file and opens another folder for another 30 seconds. No card means the LED stays solid and nothing is written. The folder is `/logs/<stamp>/` with `log.cango` and `log.json`.
 
 ## What this build does not do
 
 Injection is the only transmit path: arm, confirm, an id on the project allow list, then one frame. After 60 seconds the controller returns to listen-only. An empty allow list rejects every id.
 
-There is no second CAN channel, no gateway, and no man-in-the-middle. `discover` and `run_action` return `not_implemented`. Find modules stays visible and disabled. The + control starts a vehicle. Zero XB is a built-in listen-only dealer project with an empty allow list, so the first job is to record the bus. A card file named `zero-xb` overrides that built-in. The log is not a seed/key, immobilizer, odometer, emissions, or chassis-control procedure, and the firmware does not invent one.
+There is no second CAN channel, no gateway, and no man-in-the-middle. `discover` and `run_action` return `not_implemented`. Find modules stays visible and disabled. The + control starts a vehicle. Zero XB is a built-in listen-only project with an empty allow list, so the first job is to record the bus. A card file named `zero-xb` overrides that built-in. The log is not a seed/key, immobilizer, odometer, emissions, or chassis-control procedure, and the firmware does not invent one.
 
 ## Layout
 
 | path | role |
 | --- | --- |
-| `common/` | frames, log, filter, dealer detector, capture, projects. Host-tested C |
+| `common/` | frames, log, filter, projects. Host-tested C |
 | `firmware/` | ESP-IDF app: TWAI, SD, NVS, HTTP, NimBLE |
 | `web/www/` | static page, copied to the card as `/www` |
 | `tools/` | codec, log printer, WiFi simulator, host test |
