@@ -9,7 +9,8 @@ The BOOT button, after the red startup flash, is the only mode switch. Modes are
 | red flash | startup, button ignored |
 | purple | capture running |
 | white | capture complete |
-| blue flash | BLE |
+| blue flash | BLE, waiting for a phone |
+| blue solid | BLE phone linked |
 | green flash | WiFi access point, station not associated |
 | green solid | station has an address |
 

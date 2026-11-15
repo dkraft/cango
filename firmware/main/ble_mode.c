@@ -30,7 +30,7 @@ static const ble_uuid128_t UUID_D =
 static uint16_t s_write_handle;
 static uint16_t s_ctrl_handle;
 static uint16_t s_data_handle;
-static uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
+static volatile uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static bool s_ctrl_on;
 static bool s_data_on;
 static bool s_up;
@@ -97,11 +97,14 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
+            ESP_LOGI(TAG, "link up, led solid");
         } else {
+            ESP_LOGW(TAG, "link failed %d", event->connect.status);
             advertise();
         }
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "link down reason %d, led flash", event->disconnect.reason);
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         s_ctrl_on = false;
         s_data_on = false;
@@ -241,6 +244,11 @@ void ble_offer_frame(const cango_frame_t *frame)
         g_app.dropped++;
         app_unlock();
     }
+}
+
+bool ble_link_up(void)
+{
+    return s_conn != BLE_HS_CONN_HANDLE_NONE;
 }
 
 void ble_mode_start(void)

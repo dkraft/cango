@@ -181,7 +181,11 @@ static void paint(uint32_t now_ms)
         return;
     }
     if (g_app.mode == CANGO_MODE_BLE) {
-        led_set(0, 0, on ? 80 : 0);
+        if (ble_link_up()) {
+            led_set(0, 0, 80);
+        } else {
+            led_set(0, 0, on ? 80 : 0);
+        }
         return;
     }
     if (g_app.sta_up) {

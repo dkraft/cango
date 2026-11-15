@@ -178,6 +178,11 @@ class BleSession(
 
     @SuppressLint("MissingPermission")
     fun startScan() {
+        // One link stops advertising, so a second scan cannot see the board.
+        if (gatt != null) {
+            post(if (subscribed) "ready" else "connecting")
+            return
+        }
         stopScan()
         synchronized(gate) { opening = false }
         fallbackScan = false

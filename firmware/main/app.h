@@ -67,6 +67,7 @@ void wifi_mode_start(void);
 void wifi_mode_stop(void);
 void ble_mode_start(void);
 void ble_mode_stop(void);
+bool ble_link_up(void);
 void ctrl_start(void);
 void ctrl_boot_release(void);
 void wifi_offer_frame(const cango_frame_t *frame);
