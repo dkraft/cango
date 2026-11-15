@@ -25,7 +25,7 @@ Open `http://127.0.0.1:8765/`. The simulator emits ids `0x100`, `0x200`, and `0x
 
 ## Android
 
-`android/` is Kotlin and Compose, min SDK 26, version 0.1.2. From that directory, `./gradlew assembleRelease` writes `app/build/outputs/apk/release/app-release.apk`. If `keystore.properties` is absent, the release build is signed with the debug key. The codec bytes match `common/` and `tools/test_host.py` checks the firmware UUID constants. The installable APK is attached to the GitHub release. Open that app and tap Scan while the LED flashes blue. The system Bluetooth page does not open the link.
+`android/` is Kotlin and Compose, min SDK 26, version 0.1.3. From that directory, `./gradlew assembleRelease` writes `app/build/outputs/apk/release/app-release.apk`. If `keystore.properties` is absent, the release build is signed with the debug key. The codec bytes match `common/` and `tools/test_host.py` checks the firmware UUID constants. The installable APK is attached to the GitHub release. Open that app and tap Scan while the LED flashes blue. The system Bluetooth page does not open the link.
 
 ## Log text
 

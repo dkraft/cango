@@ -4,11 +4,15 @@ import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -20,7 +24,15 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,6 +82,100 @@ private fun WhiteButton(
     )
 }
 
+private val LedOff = Color(0xFF3A4450)
+private val LedBlue = Color(0xFF3D7BFF)
+private val LedGreen = Color(0xFF3DDC6A)
+private val LedPurple = Color(0xFFC45CFF)
+
+/** Dealer, BLE, and WiFi, in the same colors as the board LED. */
+@Composable
+private fun LedStatus(mode: String, capture: String) {
+    val dealer = when {
+        mode == "capture" && capture == "complete" -> Color.White
+        mode == "capture" -> LedPurple
+        else -> LedOff
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Glyph("Dealer", dealer) { dealerGlyph(it) }
+        Glyph("BLE", if (mode == "ble") LedBlue else LedOff) { bleGlyph(it) }
+        Glyph("WiFi", if (mode == "wifi") LedGreen else LedOff) { wifiGlyph(it) }
+    }
+}
+
+@Composable
+private fun Glyph(name: String, color: Color, draw: DrawScope.(Color) -> Unit) {
+    Canvas(
+        Modifier
+            .padding(start = 14.dp)
+            .size(28.dp)
+            .semantics { contentDescription = name },
+    ) {
+        draw(color)
+    }
+}
+
+private fun DrawScope.dealerGlyph(color: Color) {
+    val s = size.minDimension
+    val stroke = s * 0.09f
+    val left = s * 0.42f
+    val top = s * 0.16f
+    val height = s * 0.68f
+    drawLine(color, Offset(left, top), Offset(left, top + height), stroke, StrokeCap.Round)
+    drawArc(
+        color,
+        startAngle = -90f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(left - height / 2f, top),
+        size = Size(height, height),
+        style = Stroke(width = stroke, cap = StrokeCap.Round),
+    )
+}
+
+private fun DrawScope.bleGlyph(color: Color) {
+    val s = size.minDimension
+    val w = s * 0.09f
+    val x = s * 0.50f
+    val top = s * 0.08f
+    val upper = s * 0.32f
+    val mid = s * 0.50f
+    val lower = s * 0.68f
+    val bot = s * 0.92f
+    val left = s * 0.22f
+    val right = s * 0.78f
+    fun line(a: Offset, b: Offset) = drawLine(color, a, b, w, StrokeCap.Round)
+    line(Offset(x, top), Offset(x, bot))
+    line(Offset(x, top), Offset(right, upper))
+    line(Offset(right, upper), Offset(x, mid))
+    line(Offset(x, mid), Offset(right, lower))
+    line(Offset(right, lower), Offset(x, bot))
+    line(Offset(left, upper), Offset(right, lower))
+    line(Offset(left, lower), Offset(right, upper))
+}
+
+private fun DrawScope.wifiGlyph(color: Color) {
+    val s = size.minDimension
+    val stroke = s * 0.09f
+    val cx = s * 0.50f
+    val base = s * 0.78f
+    drawCircle(color, radius = stroke * 0.8f, center = Offset(cx, base))
+    for (r in floatArrayOf(s * 0.22f, s * 0.36f, s * 0.50f)) {
+        drawArc(
+            color = color,
+            startAngle = 210f,
+            sweepAngle = 120f,
+            useCenter = false,
+            topLeft = Offset(cx - r, base - r),
+            size = Size(r * 2f, r * 2f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+    }
+}
+
 private val CangoScheme = darkColorScheme(
     background = Color(CangoGrey),
     surface = Color(CangoGrey),
@@ -86,7 +192,8 @@ private val CangoScheme = darkColorScheme(
 @Composable
 fun CangoApp() {
     val context = LocalContext.current
-    var link by remember { mutableStateOf("idle") }
+    var mode by remember { mutableStateOf("") }
+    var capture by remember { mutableStateOf("idle") }
     var profile by remember { mutableStateOf("dealer") }
     var armed by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
@@ -100,7 +207,9 @@ fun CangoApp() {
     val session = remember {
         BleSession(
             context.applicationContext,
-            onStatus = { link = it },
+            onStatus = { text ->
+                if (text == "ready" || text == "connected") mode = "ble"
+            },
             onFrames = { batch ->
                 frames.addAll(batch)
                 while (frames.size > 80) frames.removeAt(0)
@@ -110,7 +219,9 @@ fun CangoApp() {
                 if (obj.optString("op") == "bus_status") {
                     armed = obj.optBoolean("armed")
                     profile = obj.optString("profile", profile)
-                    link = obj.optString("state") + " " + obj.optString("mode")
+                    capture = obj.optString("capture", capture)
+                    val reported = obj.optString("mode")
+                    if (reported.isNotEmpty()) mode = reported
                 } else if (obj.optString("op") == "arm_tx" && obj.optBoolean("ok")) {
                     armed = true
                 } else if (obj.optString("op") == "disarm") {
@@ -120,14 +231,12 @@ fun CangoApp() {
         )
     }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.all { it }) session.startScan() else link = "permission denied"
+        if (granted.values.all { it }) session.startScan()
     }
     MaterialTheme(colorScheme = CangoScheme) {
     Surface(Modifier.fillMaxSize(), color = CangoScheme.background, contentColor = Color.White) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-        Text("CANGO  $link", color = Color.White)
-        Text("Profile $profile. Mode changes with the BOOT button.", color = Color.White)
-        Text("Tap Scan. The system Bluetooth page does not open this link.", color = Color.White)
+        LedStatus(mode, capture)
         Row {
             WhiteButton(onClick = {
                 val needed = if (Build.VERSION.SDK_INT >= 31) {
