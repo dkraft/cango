@@ -42,6 +42,8 @@ static bool s_watch_on;
 static struct ble_npl_callout s_watch;
 static char s_acc[800];
 static size_t s_acc_n;
+/* Command JSON is built on the host task. Keep it off that stack. */
+static char s_cmd_out[1000];
 static SemaphoreHandle_t s_tx_mu;
 static volatile uint16_t s_mtu = 23;
 
@@ -366,27 +368,40 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 
 static void take_write(struct os_mbuf *om)
 {
-    char out[1000];
+    /* ATT write mbufs are not packet headers. PKTLEN is the wrong length. */
     while (om != NULL && s_acc_n < sizeof(s_acc) - 1) {
         uint16_t n = om->om_len;
         if (s_acc_n + n >= sizeof(s_acc)) {
             n = (uint16_t)(sizeof(s_acc) - 1 - s_acc_n);
         }
-        memcpy(s_acc + s_acc_n, om->om_data, n);
-        s_acc_n += n;
+        if (n > 0 && om->om_data != NULL) {
+            memcpy(s_acc + s_acc_n, om->om_data, n);
+            s_acc_n += n;
+        }
         om = SLIST_NEXT(om, om_next);
     }
     s_acc[s_acc_n] = 0;
-    if (strchr(s_acc, '\n') == NULL && s_acc_n < sizeof(s_acc) - 1) {
-        return;
-    }
-    {
-        int n = session_handle(s_acc, out, (int)sizeof(out), LINK_BLE);
-        s_acc_n = 0;
-        s_acc[0] = 0;
-        if (n > 0) {
-            reply_put(out, (size_t)n);
+    for (;;) {
+        char *nl = strchr(s_acc, '\n');
+        size_t rest;
+        int n;
+        if (nl == NULL) {
+            /* A full buffer with no newline will never parse. Drop it. */
+            if (s_acc_n >= sizeof(s_acc) - 1) {
+                s_acc_n = 0;
+                s_acc[0] = 0;
+            }
+            return;
         }
+        *nl = '\0';
+        n = session_handle(s_acc, s_cmd_out, (int)sizeof(s_cmd_out), LINK_BLE);
+        if (n > 0 && (size_t)n < sizeof(s_cmd_out)) {
+            reply_put(s_cmd_out, (size_t)n);
+        }
+        rest = s_acc_n - (size_t)(nl + 1 - s_acc);
+        memmove(s_acc, nl + 1, rest);
+        s_acc_n = rest;
+        s_acc[s_acc_n] = 0;
     }
 }
 
@@ -558,7 +573,7 @@ void ble_mode_start(void)
         s_tx_mu = xSemaphoreCreateMutex();
     }
     if (!s_tx_task) {
-        xTaskCreate(tx_task, "ble_tx", 4096, NULL, 6, NULL);
+        xTaskCreate(tx_task, "ble_tx", 8192, NULL, 6, NULL);
         s_tx_task = true;
     }
     if (nimble_port_init() != ESP_OK) {

@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -44,6 +45,9 @@ class BleSession(
     private var opening = false
     private val gate = Any()
     private val outQueue: ArrayDeque<ByteArray> = ArrayDeque()
+    /** ATT payload. 20 until the phone finishes MTU exchange. A larger write is dropped. */
+    private var payMax = 20
+    private var writeFails = 0
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -110,6 +114,9 @@ class BleSession(
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS && mtu >= 23) {
+                synchronized(gate) { payMax = mtu - 3 }
+            }
             subscribe(g)
         }
 
@@ -169,6 +176,10 @@ class BleSession(
                 }
             } else {
                 acc.append(String(value, Charsets.UTF_8))
+                if (acc.length > 1500 && acc.indexOf("\n") < 0) {
+                    acc.setLength(0)
+                    return
+                }
                 var nl = acc.indexOf("\n")
                 while (nl >= 0) {
                     val line = acc.substring(0, nl)
@@ -256,8 +267,15 @@ class BleSession(
     @SuppressLint("MissingPermission")
     fun send(json: String) {
         val payload = if (json.endsWith("\n")) json else json + "\n"
+        val bytes = payload.toByteArray(Charsets.UTF_8)
         val g = synchronized(gate) {
-            outQueue.add(payload.toByteArray(Charsets.UTF_8))
+            val max = payMax.coerceIn(20, 512)
+            var off = 0
+            while (off < bytes.size) {
+                val n = minOf(max, bytes.size - off)
+                outQueue.add(bytes.copyOfRange(off, off + n))
+                off += n
+            }
             gatt
         }
         if (g != null) pumpWrites(g)
@@ -275,9 +293,29 @@ class BleSession(
             ch = w
             next = queued
         }
-        ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        ch.value = next
-        g.writeCharacteristic(ch)
+        val wrote = if (Build.VERSION.SDK_INT >= 33) {
+            g.writeCharacteristic(ch, next, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) ==
+                BluetoothStatusCodes.SUCCESS
+        } else {
+            ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            ch.value = next
+            g.writeCharacteristic(ch)
+        }
+        if (wrote) {
+            writeFails = 0
+            return
+        }
+        writeFails++
+        synchronized(gate) {
+            gattBusy = false
+            if (writeFails < 5) outQueue.addFirst(next)
+        }
+        if (writeFails < 5) {
+            main.postDelayed({ if (gatt === g) pumpWrites(g) }, 40)
+        } else {
+            writeFails = 0
+            pumpWrites(g)
+        }
     }
 
     @SuppressLint("MissingPermission")
