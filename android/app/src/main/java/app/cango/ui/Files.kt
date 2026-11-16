@@ -33,6 +33,7 @@ internal class CardModel {
     var generation by mutableIntStateOf(0)
     var more by mutableStateOf(false)
     var pending by mutableStateOf<String?>(null)
+    var stamp by mutableIntStateOf(0)
     private val rows: SnapshotStateList<CardRow> = emptyList<CardRow>().toMutableStateList()
 
     fun request(): String = """{"op":"list_dir","path":${JSONObject.quote(path)},"skip":$skip}"""
@@ -79,17 +80,24 @@ internal class CardModel {
                 rows.clear()
             }
             more = false
+            stamp++
             return
         }
         if (skip == 0) {
             rows.clear()
         }
-        val entries = obj.optJSONArray("entries") ?: return
+        val entries = obj.optJSONArray("entries")
+        if (entries == null) {
+            more = false
+            stamp++
+            return
+        }
         for (i in 0 until entries.length()) {
             val entry = entries.getJSONObject(i)
             rows.add(CardRow(entry.optString("name"), entry.optBoolean("dir"), entry.optLong("bytes")))
         }
         more = obj.optBoolean("more")
+        stamp++
     }
 
     @Composable
@@ -127,6 +135,7 @@ internal class CardModel {
 
 @Composable
 internal fun FilesView(model: CardModel, onSend: (String) -> Unit) {
+    model.stamp
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             WhiteButton(enabled = model.path.isNotEmpty(), onClick = { model.up() }) {

@@ -42,6 +42,18 @@ static bool s_watch_on;
 static struct ble_npl_callout s_watch;
 static char s_acc[800];
 static size_t s_acc_n;
+static SemaphoreHandle_t s_tx_mu;
+static volatile uint16_t s_mtu = 23;
+
+/* Command replies leave the host task and are sent from the TX task, so a
+ * status notification cannot split one JSON line. */
+#define REPLY_SLOTS 4
+static char s_rq[REPLY_SLOTS][1000];
+static uint16_t s_rq_len[REPLY_SLOTS];
+static uint8_t s_rq_r;
+static uint8_t s_rq_w;
+static uint8_t s_rq_n;
+static char s_tx_body[1000];
 
 #define BLE_HEARD 64
 #define BLE_COALESCE_US 200000u
@@ -78,18 +90,121 @@ void ble_heard_reset(void)
     heard_unlock();
 }
 
-static void notify(uint16_t handle, const void *data, size_t len)
+static void reply_clear(void)
 {
-    struct os_mbuf *om;
-    if (s_conn == BLE_HS_CONN_HANDLE_NONE || data == NULL || len == 0) {
+    if (s_tx_mu != NULL && xSemaphoreTake(s_tx_mu, portMAX_DELAY) == pdTRUE) {
+        s_rq_r = 0;
+        s_rq_w = 0;
+        s_rq_n = 0;
+        xSemaphoreGive(s_tx_mu);
         return;
     }
-    om = ble_hs_mbuf_from_flat(data, (uint16_t)len);
-    if (om == NULL) {
+    s_rq_r = 0;
+    s_rq_w = 0;
+    s_rq_n = 0;
+}
+
+static void reply_put(const char *data, size_t len)
+{
+    if (s_tx_mu == NULL || data == NULL || len == 0 || len >= sizeof(s_rq[0])) {
         return;
     }
-    if (ble_gatts_notify_custom(s_conn, handle, om) == BLE_HS_ENOTCONN) {
-        s_stale = true;
+    if (xSemaphoreTake(s_tx_mu, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return;
+    }
+    if (s_rq_n < REPLY_SLOTS) {
+        memcpy(s_rq[s_rq_w], data, len);
+        s_rq_len[s_rq_w] = (uint16_t)len;
+        s_rq_w = (uint8_t)((s_rq_w + 1) % REPLY_SLOTS);
+        s_rq_n++;
+    } else {
+        ESP_LOGW(TAG, "reply full");
+    }
+    xSemaphoreGive(s_tx_mu);
+}
+
+static bool reply_take(char *dst, size_t cap, size_t *out_n)
+{
+    size_t n;
+    if (s_tx_mu == NULL || dst == NULL || out_n == NULL || cap < 2) {
+        return false;
+    }
+    if (xSemaphoreTake(s_tx_mu, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return false;
+    }
+    if (s_rq_n == 0) {
+        xSemaphoreGive(s_tx_mu);
+        return false;
+    }
+    n = s_rq_len[s_rq_r];
+    if (n >= cap) {
+        n = cap - 1;
+    }
+    memcpy(dst, s_rq[s_rq_r], n);
+    *out_n = n;
+    s_rq_r = (uint8_t)((s_rq_r + 1) % REPLY_SLOTS);
+    s_rq_n--;
+    xSemaphoreGive(s_tx_mu);
+    return true;
+}
+
+/* The stack frees the mbuf on every return. Retry only builds a new one. */
+static bool notify_raw(uint16_t handle, const void *data, size_t len)
+{
+    int tries;
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || data == NULL || len == 0 || len > 180) {
+        return false;
+    }
+    for (tries = 0; tries < 6; tries++) {
+        struct os_mbuf *om;
+        int rc;
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
+            return false;
+        }
+        om = ble_hs_mbuf_from_flat(data, (uint16_t)len);
+        if (om == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        rc = ble_gatts_notify_custom(s_conn, handle, om);
+        if (rc == 0) {
+            return true;
+        }
+        if (rc == BLE_HS_ENOTCONN) {
+            s_stale = true;
+            return false;
+        }
+        if (rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY || rc == BLE_HS_ESTALLED) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        ESP_LOGW(TAG, "notify %d", rc);
+        return false;
+    }
+    return false;
+}
+
+/* Control JSON is reassembled on the phone until the newline. NimBLE
+ * truncates one notification to the ATT payload, so a directory page has to
+ * leave in pieces. A failed piece stops the line instead of skipping bytes. */
+static void notify_msg(uint16_t handle, const void *data, size_t len)
+{
+    const uint8_t *p = data;
+    uint16_t mtu = s_mtu;
+    uint16_t chunk = 20;
+    if (mtu > 23) {
+        chunk = (uint16_t)(mtu - 3);
+        if (chunk > 180) {
+            chunk = 180;
+        }
+    }
+    while (len > 0) {
+        size_t n = len > chunk ? chunk : len;
+        if (!notify_raw(handle, p, n)) {
+            return;
+        }
+        p += n;
+        len -= n;
     }
 }
 
@@ -112,6 +227,10 @@ static void link_down(const char *why)
     s_dropping = false;
     s_stale = false;
     s_alive_ms = 0;
+    s_mtu = 23;
+    s_acc_n = 0;
+    s_acc[0] = 0;
+    reply_clear();
     advertise();
 }
 
@@ -205,6 +324,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_conn = event->connect.conn_handle;
             s_dropping = false;
             s_stale = false;
+            s_mtu = 23;
             s_alive_ms = now_ms();
             tighten_link(s_conn);
             ESP_LOGI(TAG, "link up, led solid");
@@ -235,6 +355,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_alive_ms = now_ms();
         return 0;
     case BLE_GAP_EVENT_MTU:
+        if (event->mtu.value >= 23) {
+            s_mtu = event->mtu.value;
+        }
         return 0;
     default:
         return 0;
@@ -261,8 +384,8 @@ static void take_write(struct os_mbuf *om)
         int n = session_handle(s_acc, out, (int)sizeof(out), LINK_BLE);
         s_acc_n = 0;
         s_acc[0] = 0;
-        if (n > 0 && s_ctrl_on) {
-            notify(s_ctrl_handle, out, (size_t)n);
+        if (n > 0) {
+            reply_put(out, (size_t)n);
         }
     }
 }
@@ -340,6 +463,12 @@ static void tx_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
+        if (s_ctrl_on) {
+            size_t pending = 0;
+            if (reply_take(s_tx_body, sizeof(s_tx_body), &pending)) {
+                notify_msg(s_ctrl_handle, s_tx_body, pending);
+            }
+        }
         now = app_now_us();
         heard_lock();
         for (i = 0; i < BLE_HEARD && n < 8; i++) {
@@ -358,13 +487,13 @@ static void tx_task(void *arg)
         if (n > 0 && s_data_on) {
             len = cango_batch_encode(raw, sizeof(raw), seq++, batch, n);
             if (len > 0) {
-                notify(s_data_handle, raw, (size_t)len);
+                notify_raw(s_data_handle, raw, (size_t)len);
             }
         }
         if (esp_timer_get_time() - last > 1000000 && s_ctrl_on) {
             char status[512];
             session_status(status, (int)sizeof(status));
-            notify(s_ctrl_handle, status, strlen(status));
+            notify_msg(s_ctrl_handle, status, strlen(status));
             last = esp_timer_get_time();
         }
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -424,6 +553,9 @@ void ble_mode_start(void)
     }
     if (s_heard_mu == NULL) {
         s_heard_mu = xSemaphoreCreateMutex();
+    }
+    if (s_tx_mu == NULL) {
+        s_tx_mu = xSemaphoreCreateMutex();
     }
     if (!s_tx_task) {
         xTaskCreate(tx_task, "ble_tx", 4096, NULL, 6, NULL);

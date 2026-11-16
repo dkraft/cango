@@ -69,12 +69,16 @@ class BleSession(
             if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 val retry = fallbackScan
                 fallbackScan = false
-                synchronized(gate) { opening = false }
+                synchronized(gate) {
+                    opening = false
+                    writeChar = null
+                    gattBusy = false
+                    outQueue.clear()
+                }
                 subscribed = false
                 announced = false
-                writeChar = null
-                gattBusy = false
                 descQueue.clear()
+                acc.setLength(0)
                 post(if (status == BluetoothGatt.GATT_SUCCESS) "disconnected" else "disconnected $status")
                 g.close()
                 if (gatt === g) {
@@ -124,7 +128,7 @@ class BleSession(
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            gattBusy = false
+            synchronized(gate) { gattBusy = false }
             if (descQueue.isNotEmpty()) {
                 pump(g)
                 return
@@ -137,7 +141,7 @@ class BleSession(
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            gattBusy = false
+            synchronized(gate) { gattBusy = false }
             pumpWrites(g)
         }
 
@@ -252,19 +256,25 @@ class BleSession(
     @SuppressLint("MissingPermission")
     fun send(json: String) {
         val payload = if (json.endsWith("\n")) json else json + "\n"
-        outQueue.add(payload.toByteArray(Charsets.UTF_8))
-        val g = gatt ?: return
-        pumpWrites(g)
+        val g = synchronized(gate) {
+            outQueue.add(payload.toByteArray(Charsets.UTF_8))
+            gatt
+        }
+        if (g != null) pumpWrites(g)
     }
 
     @SuppressLint("MissingPermission")
     private fun pumpWrites(g: BluetoothGatt) {
-        if (gattBusy) {
-            return
+        val next: ByteArray
+        val ch: BluetoothGattCharacteristic
+        synchronized(gate) {
+            if (gattBusy) return
+            val w = writeChar ?: return
+            val queued = outQueue.removeFirstOrNull() ?: return
+            gattBusy = true
+            ch = w
+            next = queued
         }
-        val ch = writeChar ?: return
-        val next = outQueue.removeFirstOrNull() ?: return
-        gattBusy = true
         ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         ch.value = next
         g.writeCharacteristic(ch)
@@ -292,11 +302,12 @@ class BleSession(
 
     @SuppressLint("MissingPermission")
     private fun pump(g: BluetoothGatt) {
-        if (gattBusy) {
-            return
+        val desc = synchronized(gate) {
+            if (gattBusy) return
+            val next = descQueue.removeFirstOrNull() ?: return
+            gattBusy = true
+            next
         }
-        val desc = descQueue.removeFirstOrNull() ?: return
-        gattBusy = true
         g.writeDescriptor(desc)
     }
 

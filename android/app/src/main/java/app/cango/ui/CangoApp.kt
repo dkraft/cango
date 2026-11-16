@@ -98,10 +98,9 @@ private val LedPurple = Color(0xFFC45CFF)
 @Composable
 private fun LedStatus(mode: String, capture: String, linked: Boolean) {
     val logging = mode == "capture" && capture == "running"
-    val bleWait = mode == "ble" && !linked
     var on by remember { mutableStateOf(true) }
-    LaunchedEffect(logging || bleWait) {
-        if (!logging && !bleWait) {
+    LaunchedEffect(logging) {
+        if (!logging) {
             on = true
             return@LaunchedEffect
         }
@@ -115,12 +114,7 @@ private fun LedStatus(mode: String, capture: String, linked: Boolean) {
         logging && !on -> LedOff
         else -> LedPurple
     }
-    val bleColor = when {
-        mode != "ble" -> LedOff
-        linked -> LedBlue
-        on -> LedBlue
-        else -> LedOff
-    }
+    val bleColor = if (mode == "ble" && linked) LedBlue else LedOff
     Row(
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -240,7 +234,7 @@ fun CangoApp() {
     var mode by remember { mutableStateOf("") }
     var capture by remember { mutableStateOf("idle") }
     var linked by remember { mutableStateOf(false) }
-    var heard by remember { mutableStateOf(0L) }
+    var readyGen by remember { mutableIntStateOf(0) }
     var project by remember { mutableStateOf("generic") }
     var ssid0 by remember { mutableStateOf("") }
     var pass0 by remember { mutableStateOf("") }
@@ -261,10 +255,14 @@ fun CangoApp() {
             context.applicationContext,
             onStatus = { text ->
                 when {
-                    text == "ready" || text == "connected" -> {
+                    text == "ready" -> {
                         mode = "ble"
                         linked = true
-                        heard = System.currentTimeMillis()
+                        readyGen++
+                    }
+                    text == "connected" -> {
+                        mode = "ble"
+                        linked = true
                     }
                     text.startsWith("disconnected") || text.startsWith("discover failed") || text == "service missing" -> {
                         linked = false
@@ -273,14 +271,17 @@ fun CangoApp() {
             },
             onFrames = { batch -> sniff.ingest(batch) },
             onJson = { line ->
-                val obj = JSONObject(line)
+                val obj = try {
+                    JSONObject(line)
+                } catch (_err: org.json.JSONException) {
+                    return@BleSession
+                }
                 if (obj.optString("op") == "bus_status") {
                     armed = obj.optBoolean("armed")
                     project = obj.optString("project", project)
                     capture = obj.optString("capture", capture)
                     val reported = obj.optString("mode")
                     if (reported.isNotEmpty()) mode = reported
-                    heard = System.currentTimeMillis()
                     linked = true
                 } else if (obj.optString("op") == "list_dir") {
                     files.apply(obj)
@@ -314,16 +315,6 @@ fun CangoApp() {
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (granted.values.all { it }) session.startScan()
     }
-    LaunchedEffect(linked) {
-        if (!linked) return@LaunchedEffect
-        while (true) {
-            delay(1000)
-            if (System.currentTimeMillis() - heard > 3000) {
-                linked = false
-                return@LaunchedEffect
-            }
-        }
-    }
     LaunchedEffect(menu, linked) {
         if (menu && linked) session.send("""{"op":"get_wifi"}""")
     }
@@ -333,7 +324,7 @@ fun CangoApp() {
     val cardPath = files.path
     val cardSkip = files.skip
     val cardGen = files.generation
-    LaunchedEffect(linked, menu, screen, cardPath, cardSkip, cardGen) {
+    LaunchedEffect(linked, readyGen, menu, screen, cardPath, cardSkip, cardGen) {
         if (linked && !menu && screen == 2) session.send(files.request())
     }
     MaterialTheme(colorScheme = CangoScheme) {

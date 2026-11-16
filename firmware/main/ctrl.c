@@ -122,12 +122,11 @@ static void capture_begin(uint32_t now_us)
     capture_close(false);
     s_complete = false;
     s_dir[0] = 0;
-    if (!g_app.sd_ok) {
-        return;
-    }
     s_fp = storage_open_capture(now_us, s_dir, (int)sizeof(s_dir));
     if (s_fp == NULL) {
-        ESP_LOGW(TAG, "log open failed");
+        if (g_app.sd_ok) {
+            ESP_LOGW(TAG, "log open failed");
+        }
         return;
     }
     memset(&s_census, 0, sizeof(s_census));

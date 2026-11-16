@@ -5,6 +5,7 @@
 
 #include "cango_project.h"
 #include "driver/spi_common.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "nvs.h"
@@ -23,9 +24,14 @@
 
 static const char *TAG = "storage";
 static nvs_handle_t s_nvs;
+static sdmmc_host_t s_sd_host;
+static sdspi_device_config_t s_sd_slot;
+static bool s_sd_bus;
+static bool s_sd_fail_logged;
 
 static void seed_generic_project(void);
 static void ensure_card_layout(void);
+static bool mount_card(void);
 
 static void ensure_dir(const char *path)
 {
@@ -74,26 +80,17 @@ void storage_init(void)
         .max_transfer_sz = 16384,
     };
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    esp_vfs_fat_sdmmc_mount_config_t mount = {
-        .format_if_mount_failed = false,
-        .max_files = 8,
-        .allocation_unit_size = 16 * 1024,
-    };
-    sdmmc_card_t *card = NULL;
     host.max_freq_khz = CANGO_SD_HZ / 1000;
     slot.gpio_cs = PIN_SD_CS;
     slot.host_id = host.slot;
+    s_sd_host = host;
+    s_sd_slot = slot;
     if (spi_bus_initialize(host.slot, &bus, SDSPI_DEFAULT_DMA) != ESP_OK) {
         ESP_LOGE(TAG, "spi bus");
         return;
     }
-    if (esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot, &mount, &card) != ESP_OK) {
-        ESP_LOGW(TAG, "sd mount failed");
-        return;
-    }
-    g_app.sd_ok = true;
-    ensure_card_layout();
-    ESP_LOGI(TAG, "sd ready");
+    s_sd_bus = true;
+    mount_card();
 }
 
 /* Factory Generic is not user-writable. Recreate the file only when it is missing. */
@@ -128,6 +125,45 @@ static void ensure_card_layout(void)
     ensure_dir("/sdcard/projects");
     ensure_dir("/sdcard/logs");
     seed_generic_project();
+}
+
+/* A card inserted after boot is mounted on the next list or capture. No format. */
+static bool mount_card(void)
+{
+    esp_vfs_fat_sdmmc_mount_config_t mount = {
+        .format_if_mount_failed = false,
+        .max_files = 8,
+        .allocation_unit_size = 16 * 1024,
+    };
+    sdmmc_card_t *card = NULL;
+    esp_err_t err;
+    if (g_app.sd_ok) {
+        return true;
+    }
+    if (!s_sd_bus) {
+        return false;
+    }
+    err = esp_vfs_fat_sdspi_mount("/sdcard", &s_sd_host, &s_sd_slot, &mount, &card);
+    if (err != ESP_OK) {
+        if (!s_sd_fail_logged) {
+            ESP_LOGW(TAG, "sd mount failed %s", esp_err_to_name(err));
+            s_sd_fail_logged = true;
+        }
+        return false;
+    }
+    g_app.sd_ok = true;
+    s_sd_fail_logged = false;
+    ensure_card_layout();
+    ESP_LOGI(TAG, "sd ready");
+    return true;
+}
+
+static bool card_ready(void)
+{
+    if (g_app.sd_ok) {
+        return true;
+    }
+    return mount_card();
 }
 
 static bool dir_has_names(const char *path)
@@ -287,7 +323,7 @@ bool storage_save_project(const cango_project_t *project)
     char body[768];
     FILE *f;
     int n;
-    if (!g_app.sd_ok || project == NULL || cango_project_is_generic(project->id)) {
+    if (project == NULL || cango_project_is_generic(project->id) || !card_ready()) {
         return false;
     }
     n = cango_project_write(project, body, (int)sizeof(body));
@@ -514,7 +550,7 @@ int storage_dir_json(char *buf, int cap, const char *rel, int skip)
     if (buf == NULL || cap < 64) {
         return -1;
     }
-    if (!g_app.sd_ok) {
+    if (!card_ready()) {
         return snprintf(buf, (size_t)cap, "{\"op\":\"list_dir\",\"ok\":false,\"error\":\"sd\",\"path\":\"\"}\n");
     }
     if (rel == NULL) {
@@ -622,7 +658,7 @@ const char *storage_delete_path(const char *rel)
     char path[192];
     char open_dir[96];
     struct stat st;
-    if (!g_app.sd_ok) {
+    if (!card_ready()) {
         return "sd";
     }
     if (rel == NULL || rel[0] == '\0') {
@@ -650,7 +686,7 @@ const char *storage_delete_path(const char *rel)
 FILE *storage_open_capture(uint32_t stamp, char *dir_out, int dir_cap)
 {
     char path[160];
-    if (!g_app.sd_ok || dir_out == NULL || dir_cap < 24) {
+    if (!card_ready() || dir_out == NULL || dir_cap < 24) {
         return NULL;
     }
     ensure_dir("/sdcard/logs");
