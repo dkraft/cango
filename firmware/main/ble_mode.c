@@ -18,15 +18,21 @@
 
 static const char *TAG = "ble";
 
-/* 8a3c0001-1f2e-4b5a-9c0d-11c0a1000001 and the three characteristics. */
+/* BLE_UUID128_INIT is little-endian: byte 0 is the last UUID byte and stays
+ * 0x01. The characteristic number is only the 8a3c00NN field.
+ * 8a3c0001-1f2e-4b5a-9c0d-11c0a1000001 service
+ * 8a3c0002-1f2e-4b5a-9c0d-11c0a1000001 write
+ * 8a3c0003-1f2e-4b5a-9c0d-11c0a1000001 ctrl notify
+ * 8a3c0004-1f2e-4b5a-9c0d-11c0a1000001 data notify
+ */
 static const ble_uuid128_t UUID_SVC =
     BLE_UUID128_INIT(0x01, 0x00, 0x00, 0xa1, 0xc0, 0x11, 0x0d, 0x9c, 0x5a, 0x4b, 0x2e, 0x1f, 0x01, 0x00, 0x3c, 0x8a);
 static const ble_uuid128_t UUID_W =
-    BLE_UUID128_INIT(0x02, 0x00, 0x00, 0xa1, 0xc0, 0x11, 0x0d, 0x9c, 0x5a, 0x4b, 0x2e, 0x1f, 0x02, 0x00, 0x3c, 0x8a);
+    BLE_UUID128_INIT(0x01, 0x00, 0x00, 0xa1, 0xc0, 0x11, 0x0d, 0x9c, 0x5a, 0x4b, 0x2e, 0x1f, 0x02, 0x00, 0x3c, 0x8a);
 static const ble_uuid128_t UUID_N =
-    BLE_UUID128_INIT(0x03, 0x00, 0x00, 0xa1, 0xc0, 0x11, 0x0d, 0x9c, 0x5a, 0x4b, 0x2e, 0x1f, 0x03, 0x00, 0x3c, 0x8a);
+    BLE_UUID128_INIT(0x01, 0x00, 0x00, 0xa1, 0xc0, 0x11, 0x0d, 0x9c, 0x5a, 0x4b, 0x2e, 0x1f, 0x03, 0x00, 0x3c, 0x8a);
 static const ble_uuid128_t UUID_D =
-    BLE_UUID128_INIT(0x04, 0x00, 0x00, 0xa1, 0xc0, 0x11, 0x0d, 0x9c, 0x5a, 0x4b, 0x2e, 0x1f, 0x04, 0x00, 0x3c, 0x8a);
+    BLE_UUID128_INIT(0x01, 0x00, 0x00, 0xa1, 0xc0, 0x11, 0x0d, 0x9c, 0x5a, 0x4b, 0x2e, 0x1f, 0x04, 0x00, 0x3c, 0x8a);
 
 static uint16_t s_write_handle;
 static uint16_t s_ctrl_handle;
@@ -49,6 +55,8 @@ static SemaphoreHandle_t s_tx_mu;
 static volatile uint16_t s_mtu = 23;
 /* No control notify until this time. The write response has to leave first. */
 static volatile uint32_t s_tx_hold_ms;
+/* Connection-parameter update waits until Android has finished discovery. */
+static volatile uint32_t s_tighten_ms;
 
 /* Command replies leave the host task and are sent from the TX task, so a
  * status notification cannot split one JSON line. */
@@ -160,6 +168,12 @@ static bool notify_raw(uint16_t handle, const void *data, size_t len)
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || data == NULL || len == 0 || len > 180) {
         return false;
     }
+    /* A notify larger than the current ATT payload is not sent. One CAN
+     * batch is 26 bytes, and the default payload is 20. Dropping it keeps
+     * the link up until the phone raises the MTU. */
+    if (s_mtu < 23 || len > (size_t)(s_mtu - 3)) {
+        return false;
+    }
     for (tries = 0; tries < 6; tries++) {
         struct os_mbuf *om;
         int rc;
@@ -231,6 +245,7 @@ static void link_down(const char *why)
     s_stale = false;
     s_alive_ms = 0;
     s_mtu = 23;
+    s_tighten_ms = 0;
     if (s_acc_mu != NULL && xSemaphoreTake(s_acc_mu, portMAX_DELAY) == pdTRUE) {
         s_acc_n = 0;
         s_acc[0] = 0;
@@ -269,6 +284,9 @@ static void watch_cb(struct ble_npl_event *ev)
         now = now_ms();
         if (s_stale || ble_gap_conn_find(s_conn, &desc) != 0) {
             link_down(s_stale ? "notify" : "missing");
+        } else if (s_tighten_ms != 0 && (int32_t)(now - s_tighten_ms) >= 0) {
+            s_tighten_ms = 0;
+            tighten_link(s_conn);
         } else if (!s_dropping && s_ctrl_on && s_alive_ms != 0 && (int32_t)(now - s_alive_ms) > 8000) {
             int rc;
             s_dropping = true;
@@ -335,7 +353,8 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_stale = false;
             s_mtu = 23;
             s_alive_ms = now_ms();
-            tighten_link(s_conn);
+            /* Immediate parameter updates race Android service discovery. */
+            s_tighten_ms = now_ms() + 1500;
             ESP_LOGI(TAG, "link up, led solid");
         } else {
             ESP_LOGW(TAG, "link failed %d", event->connect.status);

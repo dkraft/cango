@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanCallback
@@ -24,13 +25,14 @@ import java.util.UUID
  * One BLE link to the board. Control writes are JSON plus a newline.
  * Data notifications are CANGO batches. Log files are not transferred here.
  *
- * Android allows one GATT operation at a time, and it drops a notification
- * that arrives while a write is still outstanding. Setup is service
- * discovery, then each notification enable. MTU is not requested: a stuck
- * requestMtu blocks every later callback, the icon stays grey, and the file
- * list is never sent. Commands wait until notifications are on, then one
- * write-with-response at a time, then the matching JSON line. The board
- * sends that line in 20-byte notifications.
+ * Android allows one GATT operation at a time. Starting a second one while
+ * the first is still pending drops the link. Setup waits briefly, discovers
+ * services, then enables each notification. A timeout closes the link and
+ * connects once more. It does not stack another write. MTU is not requested
+ * on this path: a stuck requestMtu blocks every later callback. Commands
+ * wait until notifications are on, then one write-with-response at a time,
+ * then the matching JSON line. The board sends that line in 20-byte
+ * notifications.
  */
 class BleSession(
     context: Context,
@@ -51,6 +53,8 @@ class BleSession(
     private var setupLeft = 0
     private var fallbackScan = false
     private var opening = false
+    private var setupTries = 0
+    private var reconnectDev: BluetoothDevice? = null
     private val gate = Any()
     private val ops: ArrayDeque<Op> = ArrayDeque()
     private var active: Op? = null
@@ -89,13 +93,18 @@ class BleSession(
                 gatt = g
                 fallbackScan = false
                 post("connected")
-                // On the callback gatt, before connectGatt's return value can replace it.
-                g.discoverServices()
+                /* Discovery on the callback thread races the board's connection
+                 * update and the phone then drops the link. */
+                main.postDelayed({
+                    if (gatt === g) g.discoverServices()
+                }, 500)
                 return
             }
             if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 val retry = fallbackScan
+                val again = reconnectDev
                 fallbackScan = false
+                reconnectDev = null
                 epoch++
                 synchronized(gate) { opening = false }
                 announced = false
@@ -116,7 +125,11 @@ class BleSession(
                 post(if (status == BluetoothGatt.GATT_SUCCESS) "disconnected" else "disconnected $status")
                 g.close()
                 if (gatt === g) gatt = null
-                if (retry) main.post { scan() }
+                if (again != null) {
+                    main.postDelayed({ connect(again) }, 400)
+                } else if (retry) {
+                    main.post { scan() }
+                }
             }
         }
 
@@ -126,17 +139,20 @@ class BleSession(
                 if (gatt !== g) return@post
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     post("discover failed $status")
+                    g.disconnect()
                     return@post
                 }
                 val service = g.getService(Gatt.service) ?: run {
                     post("service missing")
+                    g.disconnect()
                     return@post
                 }
-                val write = service.getCharacteristic(Gatt.ctrlWrite)
-                val ctrl = service.getCharacteristic(Gatt.ctrlNotify)
-                val data = service.getCharacteristic(Gatt.dataNotify)
+                val write = service.chr(Gatt.ctrlWrite, Gatt.ctrlWriteLegacy)
+                val ctrl = service.chr(Gatt.ctrlNotify, Gatt.ctrlNotifyLegacy)
+                val data = service.chr(Gatt.dataNotify, Gatt.dataNotifyLegacy)
                 if (write == null || ctrl == null || data == null) {
                     post("service missing")
+                    g.disconnect()
                     return@post
                 }
                 writeChar = write
@@ -158,7 +174,7 @@ class BleSession(
             val seen = epoch
             main.post {
                 if (gatt !== g || seen != epoch || active !is Op.Notify) return@post
-                if (status == BluetoothGatt.GATT_SUCCESS) succeed() else failActive()
+                if (status == BluetoothGatt.GATT_SUCCESS) succeed() else failStart()
             }
         }
 
@@ -166,7 +182,7 @@ class BleSession(
             val seen = epoch
             main.post {
                 if (gatt !== g || seen != epoch || active !is Op.Write) return@post
-                if (status == BluetoothGatt.GATT_SUCCESS) succeed() else failActive()
+                if (status == BluetoothGatt.GATT_SUCCESS) succeed() else failStart()
             }
         }
 
@@ -231,8 +247,14 @@ class BleSession(
         }
     }
 
+    private fun BluetoothGattService.chr(primary: UUID, legacy: UUID): BluetoothGattCharacteristic? {
+        return getCharacteristic(primary) ?: getCharacteristic(legacy)
+    }
+
     @SuppressLint("MissingPermission")
     fun startScan() {
+        setupTries = 0
+        reconnectDev = null
         if (gatt != null) {
             post(if (announced) "ready" else "connecting")
             return
@@ -380,12 +402,12 @@ class BleSession(
             is Op.Barrier -> false
         }
         if (!started) {
-            failActive()
+            failStart()
             return
         }
         main.postDelayed({
-            if (epoch == gen) failActive()
-        }, 1000)
+            if (epoch == gen) failPending()
+        }, 2500)
     }
 
     private fun succeed() {
@@ -402,28 +424,44 @@ class BleSession(
         kick()
     }
 
-    private fun failActive() {
+    /** The stack rejected the operation, so nothing is still pending. */
+    private fun failStart() {
         val op = active ?: return
         epoch++
         activeTries++
         if (activeTries < 3) {
             main.postDelayed({
                 if (gatt != null && active === op) begin(op)
-            }, 100)
+            }, 200)
             return
         }
+        dropLink(op is Op.Notify)
+    }
+
+    /** The operation may still be pending. Another one would drop the link. */
+    @SuppressLint("MissingPermission")
+    private fun failPending() {
+        val op = active ?: return
+        epoch++
+        dropLink(op is Op.Notify)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun dropLink(notify: Boolean) {
         active = null
         activeTries = 0
-        when (op) {
-            is Op.Notify -> {
-                ops.clear()
-                arming = false
-                setupLeft = 0
-                post("notify failed")
-            }
-            is Op.Write -> kick()
-            is Op.Barrier -> kick()
+        ops.clear()
+        awaitOp = null
+        awaitGen++
+        arming = false
+        setupLeft = 0
+        if (setupTries < 1) {
+            setupTries++
+            reconnectDev = gatt?.device
+        } else if (notify) {
+            post("notify failed")
         }
+        gatt?.disconnect()
     }
 
     @SuppressLint("MissingPermission")
@@ -455,6 +493,7 @@ class BleSession(
     private fun finishAnnounce() {
         if (announced) return
         announced = true
+        setupTries = 0
         post("ready")
         val held = parked.toList()
         parked.clear()

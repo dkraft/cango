@@ -4,12 +4,16 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
 
-/** GATT ids. Little-endian form is BLE_UUID128_INIT in firmware/main/ble_mode.c. */
+/** GATT ids. BLE_UUID128_INIT is little-endian: its first byte is the UUID tail. */
 object Gatt {
     val service: UUID = UUID.fromString("8a3c0001-1f2e-4b5a-9c0d-11c0a1000001")
     val ctrlWrite: UUID = UUID.fromString("8a3c0002-1f2e-4b5a-9c0d-11c0a1000001")
     val ctrlNotify: UUID = UUID.fromString("8a3c0003-1f2e-4b5a-9c0d-11c0a1000001")
     val dataNotify: UUID = UUID.fromString("8a3c0004-1f2e-4b5a-9c0d-11c0a1000001")
+    /** Tail byte was duplicated from the characteristic number on older firmware. */
+    val ctrlWriteLegacy: UUID = UUID.fromString("8a3c0002-1f2e-4b5a-9c0d-11c0a1000002")
+    val ctrlNotifyLegacy: UUID = UUID.fromString("8a3c0003-1f2e-4b5a-9c0d-11c0a1000003")
+    val dataNotifyLegacy: UUID = UUID.fromString("8a3c0004-1f2e-4b5a-9c0d-11c0a1000004")
 }
 
 data class CanFrame(
