@@ -82,6 +82,8 @@ void gvret_offer_frame(const cango_frame_t *frame);
 void session_offer_frame(const cango_frame_t *frame);
 int session_handle(const char *json, char *out, int cap, int link);
 void session_status(char *out, int cap);
+/* A finished format_card line for this link, or 0 when none is waiting. */
+int session_poll(int link, char *out, int cap);
 uint64_t session_unix_s(void);
 
 #endif

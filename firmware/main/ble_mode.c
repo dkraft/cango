@@ -546,8 +546,14 @@ static void tx_task(void *arg)
         }
         if (s_ctrl_on) {
             size_t pending = 0;
+            int late;
             if (reply_take(s_tx_body, sizeof(s_tx_body), &pending)) {
                 notify_msg(s_ctrl_handle, s_tx_body, pending);
+                sent_reply = true;
+            }
+            late = session_poll(LINK_BLE, s_tx_body, sizeof(s_tx_body));
+            if (late > 0) {
+                notify_msg(s_ctrl_handle, s_tx_body, (size_t)late);
                 sent_reply = true;
             }
         }

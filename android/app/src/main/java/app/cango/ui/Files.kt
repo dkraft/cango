@@ -1,5 +1,6 @@
 package app.cango.ui
 
+import android.util.Base64
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import org.json.JSONObject
 
@@ -35,9 +37,16 @@ internal class CardModel {
     var pending by mutableStateOf<String?>(null)
     var stamp by mutableIntStateOf(0)
     var seen by mutableStateOf(false)
+    var view by mutableStateOf<String?>(null)
+    var viewText by mutableStateOf("")
+    var viewOffset by mutableIntStateOf(0)
+    var viewMore by mutableStateOf(false)
     private val rows: SnapshotStateList<CardRow> = emptyList<CardRow>().toMutableStateList()
 
     fun request(): String = """{"op":"list_dir","path":${JSONObject.quote(path)},"skip":$skip}"""
+
+    fun viewRequest(): String =
+        """{"op":"read_file","path":${JSONObject.quote(view ?: "")},"offset":$viewOffset}"""
 
     fun deleteRequest(): String? {
         val rel = pending ?: return null
@@ -47,6 +56,17 @@ internal class CardModel {
     fun refresh() {
         skip = 0
         seen = false
+        generation++
+    }
+
+    fun reset() {
+        path = ""
+        skip = 0
+        seen = false
+        rows.clear()
+        more = false
+        pending = null
+        closeView()
         generation++
     }
 
@@ -67,6 +87,21 @@ internal class CardModel {
         rows.clear()
         more = false
         pending = null
+        closeView()
+    }
+
+    fun openView(rel: String) {
+        view = rel
+        viewText = ""
+        viewOffset = 0
+        viewMore = false
+    }
+
+    fun closeView() {
+        view = null
+        viewText = ""
+        viewOffset = 0
+        viewMore = false
     }
 
     fun page() {
@@ -106,8 +141,34 @@ internal class CardModel {
         stamp++
     }
 
+    fun applyRead(obj: JSONObject) {
+        val rel = view ?: return
+        if (obj.optString("path") != rel && obj.optString("path").isNotEmpty()) {
+            return
+        }
+        if (!obj.optBoolean("ok")) {
+            viewText = obj.optString("error")
+            viewMore = false
+            stamp++
+            return
+        }
+        if (obj.optInt("offset") != viewOffset) {
+            return
+        }
+        val raw = try {
+            Base64.decode(obj.optString("data"), Base64.DEFAULT)
+        } catch (_err: IllegalArgumentException) {
+            ByteArray(0)
+        }
+        val piece = present(raw)
+        viewText = if (viewOffset == 0) piece else viewText + piece
+        viewOffset += obj.optInt("n")
+        viewMore = obj.optBoolean("more") && viewText.length < 48000
+        stamp++
+    }
+
     @Composable
-    fun Body() {
+    fun Body(onOpenFile: (String) -> Unit) {
         Column(Modifier.fillMaxWidth()) {
             rows.forEach { row ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -116,7 +177,9 @@ internal class CardModel {
                         color = Color.White,
                         modifier = Modifier
                             .weight(1f)
-                            .clickable(enabled = row.dir) { open(row.name) },
+                            .clickable {
+                                if (row.dir) open(row.name) else onOpenFile(child(row.name))
+                            },
                     )
                     if (!row.dir) {
                         Text(
@@ -139,6 +202,25 @@ internal class CardModel {
     }
 }
 
+private fun present(bytes: ByteArray): String {
+    if (bytes.isEmpty()) {
+        return ""
+    }
+    val text = bytes.all { b ->
+        val c = b.toInt() and 0xff
+        c == 9 || c == 10 || c == 13 || c in 32..126
+    }
+    if (text) {
+        return bytes.toString(Charsets.UTF_8)
+    }
+    val out = StringBuilder()
+    for (i in bytes.indices) {
+        out.append("%02X".format(bytes[i].toInt() and 0xff))
+        out.append(if (i % 16 == 15) '\n' else ' ')
+    }
+    return out.toString()
+}
+
 @Composable
 internal fun FilesView(model: CardModel, onSend: (String) -> Unit) {
     model.stamp
@@ -156,7 +238,26 @@ internal fun FilesView(model: CardModel, onSend: (String) -> Unit) {
                 Text("↻", color = Color.White, modifier = Modifier.semantics { contentDescription = "Refresh" })
             }
         }
-        model.Body()
+        val open = model.view
+        if (open != null) {
+            Text(open, color = Color(0xFF8E98A0), modifier = Modifier.padding(vertical = 8.dp))
+            Text(
+                model.viewText,
+                color = Color.White,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row {
+                if (model.viewMore) {
+                    WhiteButton(onClick = { onSend(model.viewRequest()) }) { Text("More", color = Color.White) }
+                }
+                WhiteButton(onClick = { model.closeView() }) { Text("Close", color = Color.White) }
+            }
+        }
+        model.Body { rel ->
+            model.openView(rel)
+            onSend(model.viewRequest())
+        }
         if (model.more) {
             WhiteButton(onClick = { model.page() }) {
                 Text("↓", color = Color.White, modifier = Modifier.semantics { contentDescription = "More" })

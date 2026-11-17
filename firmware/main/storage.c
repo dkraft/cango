@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 static const char *TAG = "storage";
@@ -28,6 +29,7 @@ static sdmmc_host_t s_sd_host;
 static sdspi_device_config_t s_sd_slot;
 static bool s_sd_bus;
 static bool s_sd_fail_logged;
+static sdmmc_card_t *s_card;
 
 static void seed_generic_project(void);
 static void ensure_card_layout(void);
@@ -151,6 +153,7 @@ static bool mount_card(void)
         }
         return false;
     }
+    s_card = card;
     g_app.sd_ok = true;
     s_sd_fail_logged = false;
     ensure_card_layout();
@@ -680,6 +683,108 @@ const char *storage_delete_path(const char *rel)
     if (!rm_tree(path, 0)) {
         return "bad";
     }
+    return NULL;
+}
+
+static int b64_encode(char *dst, int cap, const uint8_t *src, int n)
+{
+    static const char tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int i = 0;
+    int o = 0;
+    while (i < n) {
+        int remain = n - i;
+        int b0 = src[i];
+        int b1 = remain > 1 ? src[i + 1] : 0;
+        int b2 = remain > 2 ? src[i + 2] : 0;
+        if (o + 5 > cap) {
+            return -1;
+        }
+        dst[o++] = tab[(b0 >> 2) & 63];
+        dst[o++] = tab[((b0 & 3) << 4) | ((b1 >> 4) & 15)];
+        dst[o++] = remain > 1 ? tab[((b1 & 15) << 2) | ((b2 >> 6) & 3)] : '=';
+        dst[o++] = remain > 2 ? tab[b2 & 63] : '=';
+        i += remain >= 3 ? 3 : remain;
+    }
+    dst[o] = '\0';
+    return o;
+}
+
+int storage_read_file(char *buf, int cap, const char *rel, uint32_t offset)
+{
+    char path[192];
+    char body[488];
+    uint8_t raw[360];
+    struct stat st;
+    FILE *f;
+    size_t n;
+    int b64;
+    long long size;
+    bool more;
+    if (buf == NULL || cap < 64) {
+        return 0;
+    }
+    if (!card_ready()) {
+        return snprintf(buf, (size_t)cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"sd\",\"path\":\"\"}\n");
+    }
+    if (rel == NULL || rel[0] == '\0' || !cango_path_under(path, sizeof(path), "/sdcard", rel)) {
+        return snprintf(buf, (size_t)cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"bad\",\"path\":\"\"}\n");
+    }
+    if (stat(path, &st) != 0) {
+        return snprintf(buf, (size_t)cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"missing\",\"path\":\"%s\"}\n", rel);
+    }
+    if (S_ISDIR(st.st_mode)) {
+        return snprintf(buf, (size_t)cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"dir\",\"path\":\"%s\"}\n", rel);
+    }
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return snprintf(buf, (size_t)cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"missing\",\"path\":\"%s\"}\n", rel);
+    }
+    if (fseeko(f, (off_t)offset, SEEK_SET) != 0) {
+        fclose(f);
+        return snprintf(buf, (size_t)cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"bad\",\"path\":\"%s\"}\n", rel);
+    }
+    n = fread(raw, 1, sizeof(raw), f);
+    fclose(f);
+    size = (long long)st.st_size;
+    more = (long long)offset + (long long)n < size;
+    b64 = b64_encode(body, (int)sizeof(body), raw, (int)n);
+    if (b64 < 0) {
+        return 0;
+    }
+    return snprintf(buf, (size_t)cap,
+                    "{\"op\":\"read_file\",\"ok\":true,\"path\":\"%s\",\"offset\":%" PRIu32
+                    ",\"n\":%u,\"size\":%lld,\"more\":%s,\"data\":\"%s\"}\n",
+                    rel, offset, (unsigned)n, size, more ? "true" : "false", body);
+}
+
+const char *storage_format_card(void)
+{
+    char open_dir[96];
+    esp_err_t err;
+    DIR *d;
+    if (s_card == NULL || !card_ready()) {
+        return "sd";
+    }
+    ctrl_capture_dir(open_dir, (int)sizeof(open_dir));
+    if (open_dir[0] != '\0') {
+        return "busy";
+    }
+    err = esp_vfs_fat_sdcard_format("/sdcard", s_card);
+    d = opendir("/sdcard");
+    if (d == NULL) {
+        g_app.sd_ok = false;
+        s_card = NULL;
+        ESP_LOGW(TAG, "format lost the card");
+        return "fail";
+    }
+    closedir(d);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "format failed %s", esp_err_to_name(err));
+        return "fail";
+    }
+    ensure_card_layout();
+    g_app.sd_ok = true;
+    ESP_LOGI(TAG, "card formatted");
     return NULL;
 }
 

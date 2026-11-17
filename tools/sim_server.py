@@ -107,6 +107,7 @@ class State:
             "projects": [],
             "www": [],
         }
+        self.files = {"logs/dealer/sample.cango": SAMPLE_LOG}
 
 
 STATE = None
@@ -133,6 +134,27 @@ def status_obj():
             "ap": "CANGO-SIM",
             "sta": False,
         }
+
+
+def bad_rel(path):
+    if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
+        return True
+    return any(part in ("", ".", "..") for part in path.split("/"))
+
+
+def empty_layout():
+    raw = json.dumps(GENERIC, separators=(",", ":")).encode("utf-8")
+    card = {
+        "": [
+            {"name": "logs", "dir": True, "bytes": 0},
+            {"name": "projects", "dir": True, "bytes": 0},
+            {"name": "www", "dir": True, "bytes": 0},
+        ],
+        "logs": [],
+        "projects": [{"name": "generic.json", "dir": False, "bytes": len(raw)}],
+        "www": [],
+    }
+    return card, {"projects/generic.json": raw}
 
 
 def handle_op(msg):
@@ -173,7 +195,43 @@ def handle_op(msg):
             STATE.card[parent] = [entry for entry in entries if entry["name"] != name]
             for key in [key for key in STATE.card if key == path or key.startswith(path + "/")]:
                 del STATE.card[key]
+            for key in [key for key in STATE.files if key == path or key.startswith(path + "/")]:
+                del STATE.files[key]
         return {"op": "delete_path", "ok": True}
+    if op == "read_file":
+        path = msg.get("path") or ""
+        try:
+            offset = int(msg.get("offset") or 0)
+        except (TypeError, ValueError):
+            offset = -1
+        if bad_rel(path) or offset < 0:
+            return {"op": "read_file", "ok": False, "error": "bad", "path": ""}
+        with STATE.lock:
+            if path in STATE.card:
+                return {"op": "read_file", "ok": False, "error": "dir", "path": path}
+            data = STATE.files.get(path)
+            if data is None:
+                return {"op": "read_file", "ok": False, "error": "missing", "path": path}
+            chunk = data[offset:offset + 360]
+            size = len(data)
+        return {
+            "op": "read_file",
+            "ok": True,
+            "path": path,
+            "offset": offset,
+            "n": len(chunk),
+            "size": size,
+            "more": offset + len(chunk) < size,
+            "data": base64.b64encode(chunk).decode("ascii"),
+        }
+    if op == "format_card":
+        if msg.get("confirm") is not True:
+            return {"op": "format_card", "ok": False, "error": "confirm"}
+        card, files = empty_layout()
+        with STATE.lock:
+            STATE.card = card
+            STATE.files = files
+        return {"op": "format_card", "ok": True, "state": "done"}
     if op in ("capture_status", "status"):
         return status_obj()
     if op in ("discover", "run_action"):

@@ -4,6 +4,9 @@
 
 #include "cango_project.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -17,6 +20,56 @@ static cango_filter_state_t s_wifi_filt;
 static cango_filter_state_t s_ble_filt;
 static uint64_t s_unix_base;
 static uint32_t s_unix_mark;
+static char s_note[160];
+static int s_note_link = -1;
+static volatile bool s_note_ready;
+static volatile bool s_formatting;
+
+static void session_note(int link, const char *line)
+{
+    app_lock();
+    snprintf(s_note, sizeof(s_note), "%s", line);
+    s_note_link = link;
+    s_note_ready = true;
+    app_unlock();
+}
+
+int session_poll(int link, char *out, int cap)
+{
+    int n;
+    if (!s_note_ready || out == NULL || cap < 8 || s_note_link != link) {
+        return 0;
+    }
+    app_lock();
+    if (!s_note_ready || s_note_link != link) {
+        app_unlock();
+        return 0;
+    }
+    n = (int)strlen(s_note);
+    if (n + 1 > cap) {
+        app_unlock();
+        return 0;
+    }
+    memcpy(out, s_note, (size_t)n + 1);
+    s_note_ready = false;
+    app_unlock();
+    return n;
+}
+
+static void format_task(void *arg)
+{
+    int link = (int)(intptr_t)arg;
+    const char *err = storage_format_card();
+    if (err == NULL) {
+        session_note(link, "{\"op\":\"format_card\",\"ok\":true,\"state\":\"done\"}\n");
+    } else {
+        char line[96];
+        snprintf(line, sizeof(line), "{\"op\":\"format_card\",\"ok\":false,\"error\":\"%s\",\"state\":\"done\"}\n", err);
+        session_note(link, line);
+    }
+    s_formatting = false;
+    vTaskDelete(NULL);
+}
 
 static const char *skip(const char *s)
 {
@@ -49,7 +102,18 @@ static bool grab_str(const char *json, const char *key, char *out, size_t cap)
         return false;
     }
     p++;
-    while (*p && *p != '"' && i + 1 < cap) {
+    /* Android's JSONObject.quote writes a slash as \/. A nested card path
+     * arrives that way, and the card rejects a backslash. */
+    while (*p != '\0' && i + 1 < cap) {
+        if (*p == '"') {
+            break;
+        }
+        if (*p == '\\') {
+            p++;
+            if (*p == '\0') {
+                break;
+            }
+        }
         out[i++] = *p++;
     }
     out[i] = 0;
@@ -201,6 +265,41 @@ int session_handle(const char *json, char *out, int cap, int link)
             return reply(out, cap, "{\"op\":\"delete_path\",\"ok\":false,\"error\":\"%s\"}\n", err);
         }
         return reply(out, cap, "{\"op\":\"delete_path\",\"ok\":true}\n");
+    }
+    if (strcmp(op, "read_file") == 0) {
+        char rel[96];
+        uint32_t offset = 0;
+        int n;
+        if (!grab_str(json, "path", rel, sizeof(rel)) || rel[0] == '\0') {
+            return reply(out, cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"bad\",\"path\":\"\"}\n");
+        }
+        grab_u32(json, "offset", &offset);
+        n = storage_read_file(out, cap, rel, offset);
+        if (n <= 0 || n >= cap) {
+            return reply(out, cap, "{\"op\":\"read_file\",\"ok\":false,\"error\":\"full\",\"path\":\"\"}\n");
+        }
+        return n;
+    }
+    if (strcmp(op, "format_card") == 0) {
+        bool confirm = false;
+        char open_dir[96];
+        grab_bool(json, "confirm", &confirm);
+        if (!confirm) {
+            return reply(out, cap, "{\"op\":\"format_card\",\"ok\":false,\"error\":\"confirm\"}\n");
+        }
+        ctrl_capture_dir(open_dir, (int)sizeof(open_dir));
+        if (open_dir[0] != '\0' || s_formatting) {
+            return reply(out, cap, "{\"op\":\"format_card\",\"ok\":false,\"error\":\"busy\"}\n");
+        }
+        if (!g_app.sd_ok) {
+            return reply(out, cap, "{\"op\":\"format_card\",\"ok\":false,\"error\":\"sd\"}\n");
+        }
+        s_formatting = true;
+        if (xTaskCreate(format_task, "fmt", 12288, (void *)(intptr_t)link, 4, NULL) != pdPASS) {
+            s_formatting = false;
+            return reply(out, cap, "{\"op\":\"format_card\",\"ok\":false,\"error\":\"fail\"}\n");
+        }
+        return reply(out, cap, "{\"op\":\"format_card\",\"ok\":true,\"state\":\"started\"}\n");
     }
     if (strcmp(op, "capture_status") == 0 || strcmp(op, "status") == 0) {
         session_status(out, cap);

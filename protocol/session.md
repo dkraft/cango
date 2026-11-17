@@ -48,6 +48,10 @@ WiFi mode answers GVRET on port 23. Two `0xE7` bytes enter binary mode. Commands
 
 `list_logs` returns `{name, kind, bytes}`. `kind` is the capture folder name.
 
-`list_dir` takes `path` relative to the card root and `skip`. An empty path is the root. The reply is `{path, skip, entries, more}`. Each entry is `{name, dir, bytes}`. Directories are listed first. A page is eight names, and the directory keeps at most 96. `..`, a leading slash, and a name that cannot be stored in JSON are `error` `bad`. No card is `error` `sd`. A missing folder is `error` `missing`. A blank card root is given `www`, `projects`, and `logs`, and `projects/generic.json` is written when that file is missing.
+`list_dir` takes `path` relative to the card root and `skip`. An empty path is the root. A slash in a JSON string may be sent as `\/`. The reply is `{path, skip, entries, more}`. Each entry is `{name, dir, bytes}`. Directories are listed first. A page is eight names, and the directory keeps at most 96. `..`, a leading slash, and a name that cannot be stored in JSON are `error` `bad`. No card is `error` `sd`. A missing folder is `error` `missing`. A blank card root is given `www`, `projects`, and `logs`, and `projects/generic.json` is written when that file is missing.
 
 `delete_path` removes that file or folder. The card root and `projects/generic.json` return `error` `rejected`. A path inside the capture folder that is still open returns `error` `busy`. A missing path returns `error` `missing`.
+
+`read_file` takes `path` and `offset`. The reply is one JSON line with `n`, `size`, `more`, and `data` as base64 of at most 360 bytes. A directory is `error` `dir`. A missing file is `error` `missing`. No card is `error` `sd`. A path the card cannot store is `error` `bad`.
+
+`format_card` requires `"confirm": true`. Without it the reply is `error` `confirm`. A capture that is still open, or a format already running, is `error` `busy`. No card is `error` `sd`. The first reply is `{ok:true, state:started}`. When the card is empty again the board sends `{ok:true, state:done}` and restores `www`, `projects`, `logs`, and `projects/generic.json`. A failed format is `{ok:false, error:fail, state:done}`.

@@ -421,6 +421,13 @@ static void tx_task(void *arg)
             }
         }
         now = esp_timer_get_time();
+        {
+            char late[160];
+            int late_n = session_poll(LINK_WIFI, late, (int)sizeof(late));
+            if (late_n > 0) {
+                send_clients((const uint8_t *)late, (size_t)late_n, HTTPD_WS_TYPE_TEXT);
+            }
+        }
         if (now - last_status > 1000000) {
             char status[512];
             session_status(status, (int)sizeof(status));

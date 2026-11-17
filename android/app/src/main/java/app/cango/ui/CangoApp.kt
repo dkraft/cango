@@ -248,6 +248,8 @@ fun CangoApp() {
     var screen by remember { mutableIntStateOf(0) }
     var menu by remember { mutableStateOf(false) }
     var help by remember { mutableStateOf(false) }
+    var formatAsk by remember { mutableStateOf(false) }
+    var formatNote by remember { mutableStateOf("") }
     var sendId by remember { mutableStateOf("123") }
     var sendData by remember { mutableStateOf("") }
     val sniff = remember { SniffModel() }
@@ -289,6 +291,22 @@ fun CangoApp() {
                     files.apply(obj)
                 } else if (obj.optString("op") == "delete_path" && obj.optBoolean("ok")) {
                     files.refresh()
+                } else if (obj.optString("op") == "read_file") {
+                    files.applyRead(obj)
+                } else if (obj.optString("op") == "format_card") {
+                    val state = obj.optString("state")
+                    if (obj.optBoolean("ok") && state == "done") {
+                        formatNote = "Card formatted"
+                        files.reset()
+                    } else if (obj.optBoolean("ok") && state == "started") {
+                        formatNote = "Formatting"
+                    } else {
+                        formatNote = when (obj.optString("error")) {
+                            "busy" -> "Card busy"
+                            "sd" -> "No card"
+                            else -> "Format failed"
+                        }
+                    }
                 } else if (obj.optString("op") == "get_wifi") {
                     val entries = obj.optJSONArray("entries")
                     if (entries != null) {
@@ -402,6 +420,12 @@ fun CangoApp() {
                     session.send("""{"op":"set_wifi","slot":0,"ssid":"${jsonEscape(ssid0)}","password":"${jsonEscape(pass0)}"}""")
                     session.send("""{"op":"set_wifi","slot":1,"ssid":"${jsonEscape(ssid1)}","password":"${jsonEscape(pass1)}"}""")
                 }) { Text("Save WiFi", color = Color.White) }
+                WhiteButton(enabled = linked, onClick = { formatAsk = true }) {
+                    Text("Format card", color = Color.White)
+                }
+                if (formatNote.isNotEmpty()) {
+                    Text(formatNote, color = Color.White, modifier = Modifier.padding(vertical = 8.dp))
+                }
                 WhiteButton(enabled = false, onClick = {}) { Text("Find modules", color = Color.White) }
             }
         }
@@ -432,6 +456,29 @@ fun CangoApp() {
             confirmButton = {
                 TextButton(
                     onClick = { help = false },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                ) { Text("Close") }
+            },
+        )
+    }
+    if (formatAsk) {
+        AlertDialog(
+            onDismissRequest = { formatAsk = false },
+            containerColor = Color(CangoGrey),
+            text = { Text("Format the card? This erases every file.", color = Color.White) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        formatAsk = false
+                        formatNote = "Formatting"
+                        session.send("""{"op":"format_card","confirm":true}""")
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                ) { Text("Format") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { formatAsk = false },
                     colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
                 ) { Text("Close") }
             },
