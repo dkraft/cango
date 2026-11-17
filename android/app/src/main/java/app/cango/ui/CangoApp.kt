@@ -448,6 +448,7 @@ fun CangoApp() {
                 Column {
                     Text("Filter — id == 0x123 && data[0] == 02", color = Color.White)
                     Text("Demo — a sample stream on this phone", color = Color.White)
+                    Text("Hold a row — name, color, and follow its reply", color = Color.White)
                     Text("Files — open a folder or drop a row", color = Color.White)
                 }
             },

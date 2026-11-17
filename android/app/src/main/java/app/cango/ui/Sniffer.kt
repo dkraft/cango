@@ -1,26 +1,40 @@
 package app.cango.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -32,8 +46,19 @@ import kotlinx.coroutines.delay
 
 private const val KeepPackets = 80
 private const val ShowPackets = 40
+private const val ReplyMs = 80L
+private const val ReplyHits = 2
 private val Dim = Color(0xFF8E98A0)
 private val Bad = Color(0xFFE25B5B)
+private val Tags = listOf(
+    0xFF3D7BFF.toInt() to "Blue",
+    0xFF3DDC97.toInt() to "Green",
+    0xFFE2B84A.toInt() to "Amber",
+    0xFFE25B5B.toInt() to "Red",
+    0xFFC07DFF.toInt() to "Violet",
+)
+
+internal data class IdMark(val name: String, val argb: Int)
 
 internal class Packet(
     val tMs: Long,
@@ -50,15 +75,25 @@ class SniffModel {
     var demo by mutableStateOf(false)
     var filterText by mutableStateOf("")
     var filterBad by mutableStateOf(false)
+    internal var marks by mutableStateOf<Map<Long, IdMark>>(emptyMap())
+    var naming by mutableStateOf(-1L)
     private var applied: Expr? = null
     private var board = passAll()
     private var t0 = 0L
+    private var watchId = -1L
+    private var trackText = ""
+    private var replyIds = emptySet<Long>()
     private val packets = mutableStateListOf<Packet>()
 
     fun json(): String = board
 
     fun setFilter(text: String) {
         filterText = text
+        if (watchId >= 0 && text != trackText) {
+            watchId = -1L
+            trackText = ""
+            replyIds = emptySet()
+        }
         if (text.isBlank()) {
             filterBad = false
             applied = null
@@ -99,7 +134,123 @@ class SniffModel {
         while (packets.size > KeepPackets) {
             packets.removeAt(0)
         }
+        pullReplies()
         generation++
+    }
+
+    /** Hold a row. Follow that id and the frames that answer it. */
+    fun hold(id: Long) {
+        naming = id
+        watchId = id
+        val extra = linked(id)
+        replyIds = extra.toSet()
+        val text = filterFor(id, extra)
+        trackText = text
+        setFilter(text)
+    }
+
+    fun saveMark(id: Long, name: String, argb: Int) {
+        val next = marks.toMutableMap()
+        if (name.isBlank() && argb == 0) {
+            next.remove(id)
+        } else {
+            next[id] = IdMark(name, argb)
+        }
+        if (next == marks) {
+            return
+        }
+        marks = next
+        generation++
+    }
+
+    fun closeNaming() {
+        naming = -1L
+    }
+
+    internal fun label(id: Long): String {
+        val name = marks[id]?.name?.trim().orEmpty()
+        return if (name.isEmpty()) "%X".format(id) else name
+    }
+
+    internal fun tint(id: Long): Color {
+        val own = marks[id]?.argb ?: 0
+        if (own != 0) {
+            return Color(own)
+        }
+        val watch = watchId
+        if (watch >= 0 && id in replyIds) {
+            val argb = marks[watch]?.argb ?: 0
+            if (argb != 0) {
+                return Color(argb)
+            }
+        }
+        return Color.White
+    }
+
+    private fun pullReplies() {
+        val id = watchId
+        if (id < 0 || filterText != trackText) {
+            return
+        }
+        val extra = linked(id)
+        val text = filterFor(id, extra)
+        if (text == trackText) {
+            return
+        }
+        replyIds = extra.toSet()
+        trackText = text
+        setFilter(text)
+    }
+
+    private fun linked(id: Long): List<Long> {
+        val forward = HashMap<Long, Int>()
+        val back = HashMap<Long, Int>()
+        var seen = 0
+        for (i in packets.indices) {
+            if (packets[i].id != id) {
+                continue
+            }
+            seen++
+            val at = packets[i].tMs
+            for (j in i + 1 until packets.size) {
+                val gap = packets[j].tMs - at
+                if (gap <= 0) {
+                    continue
+                }
+                if (gap > ReplyMs) {
+                    break
+                }
+                if (packets[j].id != id) {
+                    forward[packets[j].id] = (forward[packets[j].id] ?: 0) + 1
+                }
+                break
+            }
+            for (j in i - 1 downTo 0) {
+                val gap = at - packets[j].tMs
+                if (gap <= 0) {
+                    continue
+                }
+                if (gap > ReplyMs) {
+                    break
+                }
+                if (packets[j].id != id) {
+                    back[packets[j].id] = (back[packets[j].id] ?: 0) + 1
+                }
+                break
+            }
+        }
+        val out = ArrayList<Long>()
+        for ((key, n) in forward) {
+            if (n >= ReplyHits && n * 2 >= seen) {
+                out.add(key)
+            }
+        }
+        for ((key, n) in back) {
+            if (n >= ReplyHits && n * 2 >= seen && key !in out) {
+                out.add(key)
+            }
+        }
+        return out
     }
 
     internal fun rel(packet: Packet): String {
@@ -129,13 +280,8 @@ private fun onlyIds(ids: List<Long>): String {
     return """{"op":"set_filter","active":true,"mode":"only","ids":[$body]}"""
 }
 
-private fun sample(n: Int): List<CanFrame> {
-    val tick = (n and 0xff).toByte()
-    return listOf(
-        CanFrame(0, 0x100, 0, byteArrayOf(tick, 0x10, 0, 0, 0, 0, 0, 1)),
-        CanFrame(0, 0x200, 0, byteArrayOf(if (n % 2 == 0) 0 else 0x7f, 0x01)),
-        CanFrame(0, 0x123, 0, byteArrayOf(0x02, 0x10, ((n / 4) and 0xff).toByte())),
-    )
+private fun filterFor(id: Long, extra: List<Long>): String {
+    return (listOf(id) + extra).distinct().sorted().joinToString(" || ") { "id == 0x%X".format(it) }
 }
 
 @Composable
@@ -146,9 +292,14 @@ fun SniffView(model: SniffModel) {
         }
         var n = 0
         while (true) {
-            model.ingest(sample(n))
+            val tick = (n and 0xff).toByte()
+            model.ingest(listOf(CanFrame(0, 0x100, 0, byteArrayOf(tick, 0x10, 0, 0, 0, 0, 0, 1))))
+            delay(40)
+            model.ingest(listOf(CanFrame(0, 0x123, 0, byteArrayOf(0x02, 0x10, ((n / 4) and 0xff).toByte()))))
+            delay(100)
+            model.ingest(listOf(CanFrame(0, 0x200, 0, byteArrayOf(if (n % 2 == 0) 0 else 0x7f, 0x01))))
             n++
-            delay(250)
+            delay(110)
         }
     }
     model.generation
@@ -188,6 +339,11 @@ fun SniffView(model: SniffModel) {
                 )
             }
         }
+        val live = model.shown()
+        val liveState = rememberUpdatedState(live)
+        var pressed by remember { mutableStateOf(false) }
+        var frozen by remember { mutableStateOf<List<Packet>>(emptyList()) }
+        val rows = if (pressed) frozen else live
         Column(Modifier.horizontalScroll(rememberScrollState())) {
             Row(Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Head("Time", 68)
@@ -195,10 +351,30 @@ fun SniffView(model: SniffModel) {
                 Head("Len", 20)
                 Head("Data", 0)
             }
-            model.shown().forEach { packet ->
-                Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            rows.forEach { packet ->
+                key(packet) {
+                val held = rememberUpdatedState(packet.id)
+                Row(
+                    Modifier
+                        .padding(vertical = 2.dp)
+                        .pointerInput(packet) {
+                            detectTapGestures(
+                                onPress = {
+                                    frozen = liveState.value.toList()
+                                    pressed = true
+                                    try {
+                                        tryAwaitRelease()
+                                    } finally {
+                                        pressed = false
+                                    }
+                                },
+                                onLongPress = { model.hold(held.value) },
+                            )
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Cell(model.rel(packet), 68)
-                    Cell("%X".format(packet.id), 40)
+                    Cell(model.label(packet.id), 40, model.tint(packet.id))
                     Cell(packet.len.toString(), 20)
                     Text(
                         (0 until packet.len).joinToString(" ") { "%02X".format(packet.bytes[it]) },
@@ -210,9 +386,59 @@ fun SniffView(model: SniffModel) {
                         overflow = TextOverflow.Visible,
                     )
                 }
+                }
             }
         }
+        val naming = model.naming
+        if (naming >= 0L) {
+            NameDialog(model, naming)
+        }
     }
+}
+
+@Composable
+private fun NameDialog(model: SniffModel, id: Long) {
+    val mark = model.marks[id]
+    val name = mark?.name.orEmpty()
+    val argb = mark?.argb ?: 0
+    AlertDialog(
+        onDismissRequest = { model.closeNaming() },
+        containerColor = Color(CangoGrey),
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("%X".format(id), color = Color.White, fontFamily = FontFamily.Monospace)
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { model.saveMark(id, it, argb) },
+                    singleLine = true,
+                    label = { Text("Name", color = Color.White) },
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Name" },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    for ((color, label) in Tags) {
+                        val chosen = color == argb
+                        Box(
+                            Modifier
+                                .size(32.dp)
+                                .background(Color(color), CircleShape)
+                                .border(2.dp, if (chosen) Color.White else Color(color), CircleShape)
+                                .clickable {
+                                    model.saveMark(id, name, if (chosen) 0 else color)
+                                }
+                                .semantics { contentDescription = label },
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { model.closeNaming() },
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+            ) { Text("Close") }
+        },
+    )
 }
 
 @Composable
@@ -228,10 +454,10 @@ private fun Head(text: String, min: Int) {
 }
 
 @Composable
-private fun Cell(text: String, min: Int) {
+private fun Cell(text: String, min: Int, color: Color = Color.White) {
     Text(
         text,
-        color = Color.White,
+        color = color,
         fontFamily = FontFamily.Monospace,
         fontSize = 13.sp,
         maxLines = 1,
