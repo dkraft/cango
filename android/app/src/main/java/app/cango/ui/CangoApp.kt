@@ -265,7 +265,7 @@ fun CangoApp() {
                     text == "connected" -> {
                         mode = "ble"
                     }
-                    text.startsWith("disconnected") || text.startsWith("discover failed") || text == "service missing" -> {
+                    text.startsWith("disconnected") || text.startsWith("discover failed") || text == "service missing" || text == "notify failed" -> {
                         linked = false
                     }
                 }
@@ -329,8 +329,8 @@ fun CangoApp() {
         if (!linked || menu || screen != 2) return@LaunchedEffect
         session.send(files.request())
         var tries = 0
-        while (tries < 7 && !files.seen) {
-            delay(700)
+        while (tries < 4 && !files.seen) {
+            delay(1500)
             if (!files.seen) session.send(files.request())
             tries++
         }

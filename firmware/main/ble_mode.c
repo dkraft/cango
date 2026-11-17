@@ -42,10 +42,13 @@ static bool s_watch_on;
 static struct ble_npl_callout s_watch;
 static char s_acc[800];
 static size_t s_acc_n;
-/* Command JSON is built on the host task. Keep it off that stack. */
+static SemaphoreHandle_t s_acc_mu;
+/* Command JSON is built on the TX task, after the write response has gone out. */
 static char s_cmd_out[1000];
 static SemaphoreHandle_t s_tx_mu;
 static volatile uint16_t s_mtu = 23;
+/* No control notify until this time. The write response has to leave first. */
+static volatile uint32_t s_tx_hold_ms;
 
 /* Command replies leave the host task and are sent from the TX task, so a
  * status notification cannot split one JSON line. */
@@ -186,27 +189,25 @@ static bool notify_raw(uint16_t handle, const void *data, size_t len)
     return false;
 }
 
-/* Control JSON is reassembled on the phone until the newline. NimBLE
- * truncates one notification to the ATT payload, so a directory page has to
- * leave in pieces. A failed piece stops the line instead of skipping bytes. */
+/* Control JSON is reassembled on the phone until the newline.
+ * Android through API 32 often delivers only the first 20 bytes of a
+ * notification, even after the phone raises the ATT MTU. A directory page
+ * therefore leaves in 20-byte pieces. The gap is one connection event, so
+ * the controller finishes a piece before the next one is queued. A failed
+ * piece stops the line instead of skipping bytes. */
 static void notify_msg(uint16_t handle, const void *data, size_t len)
 {
     const uint8_t *p = data;
-    uint16_t mtu = s_mtu;
-    uint16_t chunk = 20;
-    if (mtu > 23) {
-        chunk = (uint16_t)(mtu - 3);
-        if (chunk > 180) {
-            chunk = 180;
-        }
-    }
     while (len > 0) {
-        size_t n = len > chunk ? chunk : len;
+        size_t n = len > 20 ? 20 : len;
         if (!notify_raw(handle, p, n)) {
             return;
         }
         p += n;
         len -= n;
+        if (len > 0) {
+            vTaskDelay(pdMS_TO_TICKS(45));
+        }
     }
 }
 
@@ -230,8 +231,14 @@ static void link_down(const char *why)
     s_stale = false;
     s_alive_ms = 0;
     s_mtu = 23;
-    s_acc_n = 0;
-    s_acc[0] = 0;
+    if (s_acc_mu != NULL && xSemaphoreTake(s_acc_mu, portMAX_DELAY) == pdTRUE) {
+        s_acc_n = 0;
+        s_acc[0] = 0;
+        xSemaphoreGive(s_acc_mu);
+    } else {
+        s_acc_n = 0;
+        s_acc[0] = 0;
+    }
     reply_clear();
     advertise();
 }
@@ -366,9 +373,13 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     }
 }
 
+/* Copy the ATT value and return. Parsing the line here blocks the write
+ * response, and Android then drops the notification that carries the listing. */
 static void take_write(struct os_mbuf *om)
 {
-    /* ATT write mbufs are not packet headers. PKTLEN is the wrong length. */
+    if (s_acc_mu != NULL && xSemaphoreTake(s_acc_mu, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return;
+    }
     while (om != NULL && s_acc_n < sizeof(s_acc) - 1) {
         uint16_t n = om->om_len;
         if (s_acc_n + n >= sizeof(s_acc)) {
@@ -381,27 +392,53 @@ static void take_write(struct os_mbuf *om)
         om = SLIST_NEXT(om, om_next);
     }
     s_acc[s_acc_n] = 0;
+    if (s_acc_n >= sizeof(s_acc) - 1 && strchr(s_acc, '\n') == NULL) {
+        s_acc_n = 0;
+        s_acc[0] = 0;
+    }
+    /* The ATT write response is sent when this callback returns. Hold
+     * notifications so Android does not see the listing first and drop it. */
+    s_tx_hold_ms = (uint32_t)(esp_timer_get_time() / 1000) + 50;
+    if (s_acc_mu != NULL) {
+        xSemaphoreGive(s_acc_mu);
+    }
+}
+
+static void drain_cmds(void)
+{
     for (;;) {
-        char *nl = strchr(s_acc, '\n');
+        char line[800];
+        size_t n;
         size_t rest;
-        int n;
+        char *nl;
+        int rn;
+        if (s_acc_mu != NULL && xSemaphoreTake(s_acc_mu, pdMS_TO_TICKS(50)) != pdTRUE) {
+            return;
+        }
+        nl = strchr(s_acc, '\n');
         if (nl == NULL) {
-            /* A full buffer with no newline will never parse. Drop it. */
-            if (s_acc_n >= sizeof(s_acc) - 1) {
-                s_acc_n = 0;
-                s_acc[0] = 0;
+            if (s_acc_mu != NULL) {
+                xSemaphoreGive(s_acc_mu);
             }
             return;
         }
-        *nl = '\0';
-        n = session_handle(s_acc, s_cmd_out, (int)sizeof(s_cmd_out), LINK_BLE);
-        if (n > 0 && (size_t)n < sizeof(s_cmd_out)) {
-            reply_put(s_cmd_out, (size_t)n);
+        n = (size_t)(nl - s_acc);
+        if (n >= sizeof(line)) {
+            n = sizeof(line) - 1;
         }
+        memcpy(line, s_acc, n);
+        line[n] = 0;
         rest = s_acc_n - (size_t)(nl + 1 - s_acc);
         memmove(s_acc, nl + 1, rest);
         s_acc_n = rest;
         s_acc[s_acc_n] = 0;
+        if (s_acc_mu != NULL) {
+            xSemaphoreGive(s_acc_mu);
+        }
+        rn = session_handle(line, s_cmd_out, (int)sizeof(s_cmd_out), LINK_BLE);
+        if (rn > 0 && (size_t)rn < sizeof(s_cmd_out)) {
+            reply_put(s_cmd_out, (size_t)rn);
+        }
     }
 }
 
@@ -474,14 +511,25 @@ static void tx_task(void *arg)
         int len;
         uint32_t now;
         int i;
+        bool sent_reply = false;
         if (!s_up) {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
+        }
+        drain_cmds();
+        now = (uint32_t)(esp_timer_get_time() / 1000);
+        if ((int32_t)(s_tx_hold_ms - now) > 0) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (!s_ctrl_on) {
+            last = esp_timer_get_time();
         }
         if (s_ctrl_on) {
             size_t pending = 0;
             if (reply_take(s_tx_body, sizeof(s_tx_body), &pending)) {
                 notify_msg(s_ctrl_handle, s_tx_body, pending);
+                sent_reply = true;
             }
         }
         now = app_now_us();
@@ -505,7 +553,7 @@ static void tx_task(void *arg)
                 notify_raw(s_data_handle, raw, (size_t)len);
             }
         }
-        if (esp_timer_get_time() - last > 1000000 && s_ctrl_on) {
+        if (!sent_reply && esp_timer_get_time() - last > 1000000 && s_ctrl_on) {
             char status[512];
             session_status(status, (int)sizeof(status));
             notify_msg(s_ctrl_handle, status, strlen(status));
@@ -572,8 +620,11 @@ void ble_mode_start(void)
     if (s_tx_mu == NULL) {
         s_tx_mu = xSemaphoreCreateMutex();
     }
+    if (s_acc_mu == NULL) {
+        s_acc_mu = xSemaphoreCreateMutex();
+    }
     if (!s_tx_task) {
-        xTaskCreate(tx_task, "ble_tx", 8192, NULL, 6, NULL);
+        xTaskCreate(tx_task, "ble_tx", 12288, NULL, 6, NULL);
         s_tx_task = true;
     }
     if (nimble_port_init() != ESP_OK) {
