@@ -326,7 +326,14 @@ fun CangoApp() {
     val cardSkip = files.skip
     val cardGen = files.generation
     LaunchedEffect(linked, readyGen, menu, screen, cardPath, cardSkip, cardGen) {
-        if (linked && !menu && screen == 2) session.send(files.request())
+        if (!linked || menu || screen != 2) return@LaunchedEffect
+        session.send(files.request())
+        var tries = 0
+        while (tries < 7 && !files.seen) {
+            delay(700)
+            if (!files.seen) session.send(files.request())
+            tries++
+        }
     }
     MaterialTheme(colorScheme = CangoScheme) {
     Surface(Modifier.fillMaxSize(), color = CangoScheme.background, contentColor = Color.White) {

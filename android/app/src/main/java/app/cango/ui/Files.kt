@@ -34,6 +34,7 @@ internal class CardModel {
     var more by mutableStateOf(false)
     var pending by mutableStateOf<String?>(null)
     var stamp by mutableIntStateOf(0)
+    var seen by mutableStateOf(false)
     private val rows: SnapshotStateList<CardRow> = emptyList<CardRow>().toMutableStateList()
 
     fun request(): String = """{"op":"list_dir","path":${JSONObject.quote(path)},"skip":$skip}"""
@@ -45,6 +46,7 @@ internal class CardModel {
 
     fun refresh() {
         skip = 0
+        seen = false
         generation++
     }
 
@@ -52,6 +54,7 @@ internal class CardModel {
         val cut = path.lastIndexOf('/')
         path = if (cut < 0) "" else path.substring(0, cut)
         skip = 0
+        seen = false
         rows.clear()
         more = false
         pending = null
@@ -60,6 +63,7 @@ internal class CardModel {
     fun open(name: String) {
         path = if (path.isEmpty()) name else "$path/$name"
         skip = 0
+        seen = false
         rows.clear()
         more = false
         pending = null
@@ -67,6 +71,7 @@ internal class CardModel {
 
     fun page() {
         skip = rows.size
+        seen = false
     }
 
     fun child(name: String): String = if (path.isEmpty()) name else "$path/$name"
@@ -97,6 +102,7 @@ internal class CardModel {
             rows.add(CardRow(entry.optString("name"), entry.optBoolean("dir"), entry.optLong("bytes")))
         }
         more = obj.optBoolean("more")
+        seen = true
         stamp++
     }
 
