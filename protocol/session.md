@@ -22,7 +22,7 @@ A frame is `t_us u32`, `id u32`, `flags u8`, `len u8`, `data[8]`, `reserved u16`
 
 WebSocket path `/ws`. Text frames are JSON. Binary frames are batches. `GET /logs/<folder>/<file>` downloads a log. `GET /sd/<path>` downloads any file under the card root. Each capture is a folder under `/logs` containing `log.cango`, `log.json`, and `log.csv`. The web files live on the card at `/www`.
 
-The page keeps one view filter per tab and does not send `set_filter`. The firmware has a single WiFi filter, so a device-wide filter would starve every tab. BLE does send `set_filter`, because that link cannot carry a busy bus. Checked ids are notified at most every 200 ms, latest frame per id, for up to 64 ids. Capture files ignore both filters. WiFi mode also accepts one GVRET client on TCP port 23. That socket carries the full bus, not the page filter. A new connection replaces the old one. USB serial stays the log console.
+The page keeps one view filter per tab and does not send `set_filter`. The firmware has a single WiFi filter, so a device-wide filter would starve every tab. BLE does send `set_filter`, because that link cannot carry a busy bus. The Live field is a display filter. When that filter names ids, those ids are the BLE `set_filter`. Checked ids are notified at most every 200 ms, latest frame per id, for up to 64 ids. Capture files ignore both filters. WiFi mode also accepts one GVRET client on TCP port 23. That socket carries the full bus, not the page filter. A new connection replaces the old one. USB serial stays the log console.
 
 ## Operations
 

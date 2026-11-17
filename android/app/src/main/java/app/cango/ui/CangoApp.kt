@@ -446,10 +446,8 @@ fun CangoApp() {
             containerColor = Color(CangoGrey),
             text = {
                 Column {
-                    Text("Row — one id, newest bytes", color = Color.White)
-                    Text("Check — hide that id here", color = Color.White)
-                    Text("Notch — freeze moving bits", color = Color.White)
-                    Text("Hold — keep quiet ids", color = Color.White)
+                    Text("Filter — id == 0x123 && data[0] == 02", color = Color.White)
+                    Text("Demo — a sample stream on this phone", color = Color.White)
                     Text("Files — open a folder or drop a row", color = Color.White)
                 }
             },

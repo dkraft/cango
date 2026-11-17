@@ -1,23 +1,16 @@
 package app.cango.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,207 +21,193 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cango.CanFrame
 import kotlinx.coroutines.delay
 
-private const val HeardMax = 64
-private const val FilterMax = 32
-private val Up = Color(0xFF3DDC6A)
-private val Down = Color(0xFFE25B5B)
+private const val KeepPackets = 80
+private const val ShowPackets = 40
 private val Dim = Color(0xFF8E98A0)
-private val ByteBg = Color(0xFF151A1E)
+private val Bad = Color(0xFFE25B5B)
 
-private class SniffRow(
+internal class Packet(
+    val tMs: Long,
     val id: Long,
     val ext: Boolean,
+    val len: Int,
     val bytes: IntArray,
-    val prev: IntArray,
-    val changedAt: LongArray,
-    val notch: IntArray,
-    var lastMs: Long,
 )
 
+/** Live frames. The field is a display filter. An id list is also sent on BLE. */
 class SniffModel {
     var rev by mutableIntStateOf(0)
     var generation by mutableIntStateOf(0)
-    var modeAll by mutableStateOf(true)
-    var hold by mutableStateOf(false)
-    var idFrom by mutableStateOf<Long?>(null)
-    var idTo by mutableStateOf<Long?>(null)
-    private val rows = mutableStateListOf<SniffRow>()
-    val picked = mutableStateListOf<Long>()
+    var demo by mutableStateOf(false)
+    var filterText by mutableStateOf("")
+    var filterBad by mutableStateOf(false)
+    private var applied: Expr? = null
+    private var board = passAll()
+    private var t0 = 0L
+    private val packets = mutableStateListOf<Packet>()
 
-    fun checked(id: Long): Boolean {
-        if (!modeAll && idFrom != null && idTo != null && id >= idFrom!! && id <= idTo!! && !picked.contains(id)) {
-            return true
-        }
-        val listed = picked.contains(id)
-        return if (modeAll) !listed else listed
-    }
+    fun json(): String = board
 
-    fun json(): String {
-        val mode = if (modeAll) "all" else "only"
-        val body = picked.take(FilterMax).joinToString(",")
-        val range = if (!modeAll && idFrom != null && idTo != null) {
-            ""","id_from":$idFrom,"id_to":$idTo"""
-        } else {
-            ""
-        }
-        return """{"op":"set_filter","active":true,"mode":"$mode","ids":[$body]$range}"""
-    }
-
-    private fun bump() {
-        rev++
-        generation++
-    }
-
-    fun all() {
-        modeAll = true
-        picked.clear()
-        idFrom = null
-        idTo = null
-        bump()
-    }
-
-    fun none() {
-        modeAll = false
-        picked.clear()
-        idFrom = null
-        idTo = null
-        bump()
-    }
-
-    fun toggle(id: Long) {
-        val on = checked(id)
-        if (on && !modeAll && idFrom != null && idTo != null && id >= idFrom!! && id <= idTo!! && !picked.contains(id)) {
-            idFrom = null
-            idTo = null
-            bump()
+    fun setFilter(text: String) {
+        filterText = text
+        if (text.isBlank()) {
+            filterBad = false
+            applied = null
+            publish(passAll())
+            generation++
             return
         }
-        if (modeAll) {
-            if (on) {
-                if (!picked.contains(id) && picked.size < FilterMax) picked.add(id)
-            } else {
-                picked.remove(id)
-            }
-        } else if (on) {
-            picked.remove(id)
-        } else if (!picked.contains(id) && picked.size < FilterMax) {
-            picked.add(id)
+        val expr = compile(text)
+        if (expr == null) {
+            filterBad = true
+            generation++
+            return
         }
-        bump()
-    }
-
-    fun add(raw: String, rawTo: String) {
-        val id = raw.trim().toLongOrNull(16) ?: return
-        val to = rawTo.trim().toLongOrNull(16)
-        if (!modeAll && to != null) {
-            idFrom = minOf(id, to)
-            idTo = maxOf(id, to)
-        } else if (!modeAll) {
-            if (!picked.contains(id) && picked.size < FilterMax) picked.add(id)
-        } else {
-            picked.remove(id)
-        }
-        bump()
-    }
-
-    fun notch() {
-        val now = System.currentTimeMillis()
-        for (row in rows) {
-            for (i in 0 until 8) {
-                if (now - row.changedAt[i] < 200) {
-                    row.notch[i] = row.notch[i] or (row.bytes[i] xor row.prev[i])
-                }
-            }
-        }
-        generation++
-    }
-
-    fun clearNotch() {
-        for (row in rows) {
-            for (i in 0 until 8) row.notch[i] = 0
-        }
+        filterBad = false
+        applied = expr
+        val allow = idAllow(expr).only
+        publish(if (allow != null && allow.size <= 32) onlyIds(allow) else passAll())
         generation++
     }
 
     fun ingest(batch: List<CanFrame>) {
         val now = System.currentTimeMillis()
+        if (t0 == 0L) {
+            t0 = now
+        }
         for (frame in batch) {
-            val ext = (frame.flags and 1) != 0
-            val incoming = IntArray(8) { i -> if (i < frame.data.size) frame.data[i].toInt() and 0xFF else 0 }
-            val idx = rows.indexOfFirst { it.id == frame.id && it.ext == ext }
-            if (idx < 0) {
-                if (rows.size >= HeardMax) {
-                    var quiet = 0
-                    for (i in 1 until rows.size) {
-                        if (rows[i].lastMs < rows[quiet].lastMs) quiet = i
-                    }
-                    rows.removeAt(quiet)
-                }
-                rows.add(SniffRow(frame.id, ext, incoming, incoming.copyOf(), LongArray(8), IntArray(8), now))
-            } else {
-                val row = rows[idx]
-                for (i in 0 until 8) {
-                    if (incoming[i] != row.bytes[i]) {
-                        row.prev[i] = row.bytes[i]
-                        row.bytes[i] = incoming[i]
-                        row.changedAt[i] = now
-                    }
-                }
-                row.lastMs = now
-            }
+            val n = frame.data.size.coerceAtMost(8)
+            packets.add(
+                Packet(
+                    now,
+                    frame.id,
+                    (frame.flags and 1) != 0,
+                    n,
+                    IntArray(n) { frame.data[it].toInt() and 0xff },
+                ),
+            )
+        }
+        while (packets.size > KeepPackets) {
+            packets.removeAt(0)
         }
         generation++
     }
 
-    private fun shown(now: Long): List<SniffRow> {
-        return rows.filter { checked(it.id) && (hold || now - it.lastMs <= 5000) }.sortedBy { it.id }
+    internal fun rel(packet: Packet): String {
+        val ms = (packet.tMs - t0).coerceAtLeast(0)
+        return "%d.%03d".format(ms / 1000, (ms % 1000).toInt())
     }
 
-    fun knownIds(): List<Long> = (rows.map { it.id } + picked).distinct().sorted()
+    internal fun shown(): List<Packet> {
+        val pred = applied
+        val seq = if (pred == null) packets else packets.filter { eval(pred, it) }
+        return seq.takeLast(ShowPackets).asReversed()
+    }
 
-    @Composable
-    fun Live(now: Long) {
-        shown(now).forEach { row ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Checkbox(
-                    checked = checked(row.id),
-                    onCheckedChange = { toggle(row.id) },
-                    colors = CheckboxDefaults.colors(
-                        checkedColor = Color(0xFF31576D),
-                        uncheckedColor = Color.White,
-                        checkmarkColor = Color.White,
-                    ),
-                )
+    private fun publish(next: String) {
+        if (next == board) {
+            return
+        }
+        board = next
+        rev++
+    }
+}
+
+private fun passAll(): String = """{"op":"set_filter","active":true,"mode":"all","ids":[]}"""
+
+private fun onlyIds(ids: List<Long>): String {
+    val body = ids.distinct().sorted().joinToString(",")
+    return """{"op":"set_filter","active":true,"mode":"only","ids":[$body]}"""
+}
+
+private fun sample(n: Int): List<CanFrame> {
+    val tick = (n and 0xff).toByte()
+    return listOf(
+        CanFrame(0, 0x100, 0, byteArrayOf(tick, 0x10, 0, 0, 0, 0, 0, 1)),
+        CanFrame(0, 0x200, 0, byteArrayOf(if (n % 2 == 0) 0 else 0x7f, 0x01)),
+        CanFrame(0, 0x123, 0, byteArrayOf(0x02, 0x10, ((n / 4) and 0xff).toByte())),
+    )
+}
+
+@Composable
+fun SniffView(model: SniffModel) {
+    LaunchedEffect(model.demo) {
+        if (!model.demo) {
+            return@LaunchedEffect
+        }
+        var n = 0
+        while (true) {
+            model.ingest(sample(n))
+            n++
+            delay(250)
+        }
+    }
+    model.generation
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = model.filterText,
+                onValueChange = { model.setFilter(it) },
+                singleLine = true,
+                isError = model.filterBad,
+                label = { Text("Filter", color = Color.White) },
+                placeholder = { Text("id == 0x123", color = Dim) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedLabelColor = Color.White,
+                    unfocusedLabelColor = Color.White,
+                    cursorColor = Color.White,
+                    focusedBorderColor = Color.White,
+                    unfocusedBorderColor = Dim,
+                    errorBorderColor = Bad,
+                    errorLabelColor = Bad,
+                    errorCursorColor = Bad,
+                    errorTextColor = Color.White,
+                ),
+                modifier = Modifier.weight(1f).semantics { contentDescription = "Filter" },
+            )
+            WhiteButton(onClick = { model.demo = !model.demo }) {
                 Text(
-                    "%X".format(row.id),
-                    color = if (now - row.lastMs > 2000) Dim else Color.White,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.width(72.dp),
+                    if (model.demo) "Stop" else "Demo",
+                    color = Color.White,
+                    modifier = Modifier.semantics { contentDescription = "Demo" },
                 )
-                for (i in 0 until 8) {
+            }
+        }
+        Column(Modifier.horizontalScroll(rememberScrollState())) {
+            Row(Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Head("Time", 68)
+                Head("ID", 40)
+                Head("Len", 20)
+                Head("Data", 0)
+            }
+            model.shown().forEach { packet ->
+                Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Cell(model.rel(packet), 68)
+                    Cell("%X".format(packet.id), 40)
+                    Cell(packet.len.toString(), 20)
                     Text(
-                        "%02X".format(row.bytes[i]),
-                        color = byteColor(row, i, now),
+                        (0 until packet.len).joinToString(" ") { "%02X".format(packet.bytes[it]) },
+                        color = Color.White,
                         fontFamily = FontFamily.Monospace,
-                        modifier = Modifier
-                            .padding(horizontal = 2.dp)
-                            .background(ByteBg)
-                            .padding(horizontal = 2.dp, vertical = 2.dp),
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Visible,
                     )
                 }
             }
@@ -236,107 +215,334 @@ class SniffModel {
     }
 }
 
-private fun byteColor(row: SniffRow, index: Int, now: Long): Color {
-    val mask = row.notch[index].inv() and 0xFF
-    val visNew = row.bytes[index] and mask
-    val visOld = row.prev[index] and mask
-    if (now - row.changedAt[index] < 200 && visNew != visOld) {
-        return if (visNew > visOld) Up else Down
-    }
-    if (now - row.lastMs > 2000) return Dim
-    return Color.White
-}
-
 @Composable
-fun SniffView(model: SniffModel) {
-    var tick by mutableIntStateOf(0)
-    var funnel by mutableStateOf(false)
-    var draft by mutableStateOf("")
-    var draftTo by mutableStateOf("")
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(200)
-            tick++
-        }
-    }
-    val now = System.currentTimeMillis() + if (tick < 0 || model.generation < 0) 0 else 0
-    Column(Modifier.fillMaxWidth()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Mark("▾", "Filter") { funnel = true }
-            Text(
-                "⌐",
-                color = Color.White,
-                fontSize = 22.sp,
-                modifier = Modifier.pointerInput(model) {
-                    detectTapGestures(
-                        onTap = { model.notch() },
-                        onLongPress = { model.clearNotch() },
-                    )
-                },
-            )
-            Mark(if (model.hold) "●" else "○", "Hold") { model.hold = !model.hold }
-        }
-        model.Live(now)
-    }
-    if (funnel) {
-        val known = model.knownIds()
-        AlertDialog(
-            onDismissRequest = { funnel = false },
-            containerColor = Color(CangoGrey),
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { model.all() }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
-                            Text("All")
-                        }
-                        TextButton(onClick = { model.none() }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
-                            Text("None")
-                        }
-                    }
-                    OutlinedTextField(draft, { draft = it }, colors = fieldColors())
-                    OutlinedTextField(draftTo, { draftTo = it }, colors = fieldColors())
-                    TextButton(
-                        onClick = {
-                            model.add(draft, draftTo)
-                            draft = ""
-                            draftTo = ""
-                        },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
-                    ) { Text("+") }
-                    known.forEach { id ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = model.checked(id),
-                                onCheckedChange = { model.toggle(id) },
-                                colors = CheckboxDefaults.colors(
-                                    checkedColor = Color(0xFF31576D),
-                                    uncheckedColor = Color.White,
-                                    checkmarkColor = Color.White,
-                                ),
-                            )
-                            Text("%X".format(id), color = Color.White, fontFamily = FontFamily.Monospace)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { funnel = false }, colors = ButtonDefaults.textButtonColors(contentColor = Color.White)) {
-                    Text("Close")
-                }
-            },
-        )
-    }
-}
-
-@Composable
-private fun Mark(glyph: String, name: String, onClick: () -> Unit) {
+private fun Head(text: String, min: Int) {
     Text(
-        glyph,
-        color = Color.White,
-        fontSize = 22.sp,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(8.dp)
-            .semantics { contentDescription = name },
+        text,
+        color = Dim,
+        fontSize = 13.sp,
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier.widthIn(min = min.dp).padding(end = 8.dp),
     )
+}
+
+@Composable
+private fun Cell(text: String, min: Int) {
+    Text(
+        text,
+        color = Color.White,
+        fontFamily = FontFamily.Monospace,
+        fontSize = 13.sp,
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier.widthIn(min = min.dp).padding(end = 8.dp),
+    )
+}
+
+private sealed class Expr {
+    data class Cmp(val field: Field, val op: String, val value: Long) : Expr()
+    data class Flag(val ext: Boolean) : Expr()
+    data class Contains(val bytes: IntArray) : Expr()
+    data class Not(val inner: Expr) : Expr()
+    data class And(val left: Expr, val right: Expr) : Expr()
+    data class Or(val left: Expr, val right: Expr) : Expr()
+}
+
+private sealed class Field {
+    data object Id : Field()
+    data object Len : Field()
+    data class Data(val index: Int) : Field()
+}
+
+private class IdAllow(val only: List<Long>?)
+
+private fun idAllow(expr: Expr): IdAllow = when (expr) {
+    is Expr.Cmp -> if (expr.field == Field.Id && expr.op == "==") IdAllow(listOf(expr.value)) else IdAllow(null)
+    is Expr.Flag, is Expr.Contains, is Expr.Not -> IdAllow(null)
+    is Expr.Or -> {
+        val left = idAllow(expr.left).only
+        val right = idAllow(expr.right).only
+        if (left != null && right != null) IdAllow((left + right).distinct()) else IdAllow(null)
+    }
+    is Expr.And -> {
+        val left = idAllow(expr.left).only
+        val right = idAllow(expr.right).only
+        when {
+            left != null && right != null -> IdAllow(left.intersect(right.toSet()).toList())
+            left != null && narrowable(expr.right) -> IdAllow(left)
+            right != null && narrowable(expr.left) -> IdAllow(right)
+            else -> IdAllow(null)
+        }
+    }
+}
+
+private fun narrowable(expr: Expr): Boolean = when (expr) {
+    is Expr.Cmp -> expr.field != Field.Id || expr.op == "=="
+    is Expr.Flag, is Expr.Contains -> true
+    is Expr.Not -> narrowable(expr.inner)
+    is Expr.And -> narrowable(expr.left) && narrowable(expr.right)
+    is Expr.Or -> false
+}
+
+private fun eval(expr: Expr, packet: Packet): Boolean = when (expr) {
+    is Expr.Or -> eval(expr.left, packet) || eval(expr.right, packet)
+    is Expr.And -> eval(expr.left, packet) && eval(expr.right, packet)
+    is Expr.Not -> !eval(expr.inner, packet)
+    is Expr.Flag -> packet.ext == expr.ext
+    is Expr.Contains -> contains(packet, expr.bytes)
+    is Expr.Cmp -> compare(expr.op, fieldValue(expr.field, packet), expr.value)
+}
+
+private fun fieldValue(field: Field, packet: Packet): Long = when (field) {
+    Field.Id -> packet.id
+    Field.Len -> packet.len.toLong()
+    is Field.Data -> if (field.index < packet.len) packet.bytes[field.index].toLong() else -1
+}
+
+private fun compare(op: String, left: Long, right: Long): Boolean = when (op) {
+    "==" -> left == right
+    "!=" -> left != right
+    ">" -> left > right
+    ">=" -> left >= right
+    "<" -> left < right
+    "<=" -> left <= right
+    else -> false
+}
+
+private fun contains(packet: Packet, needle: IntArray): Boolean {
+    if (needle.isEmpty() || needle.size > packet.len) {
+        return needle.isEmpty()
+    }
+    for (start in 0..packet.len - needle.size) {
+        var same = true
+        for (i in needle.indices) {
+            if (packet.bytes[start + i] != needle[i]) {
+                same = false
+            }
+        }
+        if (same) {
+            return true
+        }
+    }
+    return false
+}
+
+private class Tok(val kind: String, val text: String)
+
+private fun lex(src: String): List<Tok>? {
+    val out = ArrayList<Tok>()
+    var i = 0
+    while (i < src.length) {
+        val c = src[i]
+        if (c.isWhitespace()) {
+            i++
+            continue
+        }
+        if (c == '!' && i + 1 < src.length && src[i + 1] == '=') {
+            out.add(Tok("op", "!="))
+            i += 2
+            continue
+        }
+        if (c == '(' || c == ')' || c == '[' || c == ']' || c == '!') {
+            out.add(Tok(c.toString(), c.toString()))
+            i++
+            continue
+        }
+        if ((c == '&' || c == '|') && i + 1 < src.length && src[i + 1] == c) {
+            out.add(Tok(if (c == '&') "and" else "or", ""))
+            i += 2
+            continue
+        }
+        if ((c == '=' || c == '>' || c == '<') && i + 1 < src.length && src[i + 1] == '=') {
+            out.add(Tok("op", src.substring(i, i + 2)))
+            i += 2
+            continue
+        }
+        if (c == '>' || c == '<') {
+            out.add(Tok("op", c.toString()))
+            i++
+            continue
+        }
+        if (c == '0' && i + 1 < src.length && (src[i + 1] == 'x' || src[i + 1] == 'X')) {
+            var j = i + 2
+            while (j < src.length && src[j].isHex()) j++
+            if (j == i + 2) {
+                return null
+            }
+            out.add(Tok("num", src.substring(i, j)))
+            i = j
+            continue
+        }
+        if (c.isDigit()) {
+            var j = i
+            while (j < src.length && src[j].isDigit()) j++
+            out.add(Tok("num", src.substring(i, j)))
+            i = j
+            continue
+        }
+        if (c.isLetter()) {
+            var j = i
+            while (j < src.length && (src[j].isLetterOrDigit() || src[j] == '.' || src[j] == '_')) j++
+            out.add(Tok("id", src.substring(i, j)))
+            i = j
+            continue
+        }
+        return null
+    }
+    return out
+}
+
+private fun Char.isHex(): Boolean = this.isDigit() || this.lowercaseChar() in 'a'..'f'
+
+private fun number(text: String): Long? {
+    return if (text.startsWith("0x") || text.startsWith("0X")) {
+        text.drop(2).toLongOrNull(16)
+    } else {
+        text.toLongOrNull(10)
+    }
+}
+
+private fun hexByte(text: String): Int? {
+    val n = if (text.startsWith("0x") || text.startsWith("0X")) {
+        text.drop(2).toLongOrNull(16)
+    } else {
+        text.toLongOrNull(16)
+    }
+    if (n == null || n !in 0..255) {
+        return null
+    }
+    return n.toInt()
+}
+
+private fun fieldKind(name: String): String = when (name.lowercase()) {
+    "id", "can.id" -> "id"
+    "len", "can.len", "dlc" -> "len"
+    "ext", "can.flags.ext" -> "ext"
+    "std" -> "std"
+    "data", "can.data" -> "data"
+    else -> ""
+}
+
+private class Parser(val tok: List<Tok>) {
+    var i = 0
+
+    fun peek(): Tok? = tok.getOrNull(i)
+
+    fun eat(kind: String): Tok? {
+        val item = peek()
+        if (item == null || item.kind != kind) {
+            return null
+        }
+        i++
+        return item
+    }
+
+    fun parse(): Expr? {
+        val expr = parseOr() ?: return null
+        if (i != tok.size) {
+            return null
+        }
+        return expr
+    }
+
+    private fun parseOr(): Expr? {
+        var left = parseAnd() ?: return null
+        while (eat("or") != null) {
+            val right = parseAnd() ?: return null
+            left = Expr.Or(left, right)
+        }
+        return left
+    }
+
+    private fun parseAnd(): Expr? {
+        var left = parseUnary() ?: return null
+        while (eat("and") != null) {
+            val right = parseUnary() ?: return null
+            left = Expr.And(left, right)
+        }
+        return left
+    }
+
+    private fun parseUnary(): Expr? {
+        if (eat("!") != null) {
+            val inner = parseUnary() ?: return null
+            return Expr.Not(inner)
+        }
+        return parsePrimary()
+    }
+
+    private fun parsePrimary(): Expr? {
+        if (eat("(") != null) {
+            val inner = parseOr() ?: return null
+            if (eat(")") == null) {
+                return null
+            }
+            return inner
+        }
+        val name = eat("id") ?: return null
+        when (fieldKind(name.text)) {
+            "ext" -> return Expr.Flag(true)
+            "std" -> return Expr.Flag(false)
+            "data" -> return parseData()
+            "id", "len" -> return parseCmp(if (fieldKind(name.text) == "id") Field.Id else Field.Len)
+            else -> return null
+        }
+    }
+
+    private fun parseData(): Expr? {
+        if (eat("[") != null) {
+            val indexTok = eat("num") ?: return null
+            if (eat("]") == null) {
+                return null
+            }
+            val index = number(indexTok.text) ?: return null
+            if (index !in 0..7) {
+                return null
+            }
+            val op = eat("op") ?: return null
+            val valueTok = eat("num") ?: return null
+            val value = number(valueTok.text) ?: return null
+            if (value !in 0..255) {
+                return null
+            }
+            return Expr.Cmp(Field.Data(index.toInt()), op.text, value)
+        }
+        val word = peek()
+        if (word != null && word.kind == "id" && word.text.equals("contains", ignoreCase = true)) {
+            i++
+            val bytes = ArrayList<Int>()
+            while (peek()?.kind == "num") {
+                val item = eat("num") ?: return null
+                val value = hexByte(item.text) ?: return null
+                bytes.add(value)
+            }
+            if (bytes.isEmpty()) {
+                return null
+            }
+            return Expr.Contains(bytes.toIntArray())
+        }
+        return null
+    }
+
+    private fun parseCmp(field: Field): Expr? {
+        val op = eat("op") ?: return null
+        val valueTok = eat("num") ?: return null
+        val value = number(valueTok.text) ?: return null
+        if (field == Field.Len && value !in 0..8) {
+            return null
+        }
+        if (field == Field.Id && (value < 0 || value > 0x1FFFFFFF)) {
+            return null
+        }
+        return Expr.Cmp(field, op.text, value)
+    }
+}
+
+private fun compile(text: String): Expr? {
+    val tok = lex(text) ?: return null
+    if (tok.isEmpty()) {
+        return null
+    }
+    return Parser(tok).parse()
 }
