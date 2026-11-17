@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -49,8 +48,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.cango.BleSession
+import app.cango.BuildConfig
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
@@ -262,7 +264,6 @@ fun CangoApp() {
                     }
                     text == "connected" -> {
                         mode = "ble"
-                        linked = true
                     }
                     text.startsWith("disconnected") || text.startsWith("discover failed") || text == "service missing" -> {
                         linked = false
@@ -331,19 +332,27 @@ fun CangoApp() {
     Surface(Modifier.fillMaxSize(), color = CangoScheme.background, contentColor = Color.White) {
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp).padding(bottom = 72.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            ConfigMark(open = menu, onClick = { menu = !menu })
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(
-                "?",
-                color = if (help) Color.White else Color(0xFF8E98A0),
-                modifier = Modifier
-                    .clickable { help = !help }
-                    .padding(8.dp)
-                    .semantics { contentDescription = "Help" },
+                BuildConfig.VERSION_NAME,
+                color = Color.White,
+                fontSize = 14.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { contentDescription = "Version" },
             )
-            Spacer(Modifier.width(8.dp))
-            Spacer(Modifier.weight(1f))
-            LedStatus(mode, capture, linked)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                ConfigMark(open = menu, onClick = { menu = !menu })
+                Text(
+                    "?",
+                    color = if (help) Color.White else Color(0xFF8E98A0),
+                    modifier = Modifier
+                        .clickable { help = !help }
+                        .padding(8.dp)
+                        .semantics { contentDescription = "Help" },
+                )
+                Spacer(Modifier.weight(1f))
+                LedStatus(mode, capture, linked)
+            }
         }
         Row {
             WhiteButton(onClick = { menu = false; screen = 0 }) { Text("Live", color = Color.White) }

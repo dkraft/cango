@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.os.SystemClock
 import java.util.UUID
 
 /**
@@ -48,6 +49,10 @@ class BleSession(
     /** ATT payload. 20 until the phone finishes MTU exchange. A larger write is dropped. */
     private var payMax = 20
     private var writeFails = 0
+    private var descFails = 0
+    private var inflight: ByteArray? = null
+    private var lastNotifyMs = 0L
+    private var lastNotify = ByteArray(0)
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -78,11 +83,17 @@ class BleSession(
                     writeChar = null
                     gattBusy = false
                     outQueue.clear()
+                    descQueue.clear()
+                    payMax = 20
                 }
+                writeFails = 0
+                descFails = 0
+                inflight = null
                 subscribed = false
                 announced = false
-                descQueue.clear()
                 acc.setLength(0)
+                lastNotifyMs = 0L
+                lastNotify = ByteArray(0)
                 post(if (status == BluetoothGatt.GATT_SUCCESS) "disconnected" else "disconnected $status")
                 g.close()
                 if (gatt === g) {
@@ -131,25 +142,62 @@ class BleSession(
             }
             enable(g, service.getCharacteristic(Gatt.ctrlNotify))
             enable(g, service.getCharacteristic(Gatt.dataNotify))
-            post("ready")
+            if (descQueue.isEmpty()) {
+                finishAnnounce(g)
+            }
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            synchronized(gate) { gattBusy = false }
-            if (descQueue.isNotEmpty()) {
-                pump(g)
-                return
-            }
-            if (!announced) {
-                announced = true
-                send("""{"op":"hello"}""")
-                send("""{"op":"status"}""")
+            main.post {
+                if (gatt !== g) return@post
+                synchronized(gate) { gattBusy = false }
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    descFails++
+                    if (descFails < 5) {
+                        synchronized(gate) { descQueue.addFirst(descriptor) }
+                        pump(g)
+                    } else {
+                        descFails = 0
+                        post("notify failed")
+                    }
+                    return@post
+                }
+                descFails = 0
+                if (descQueue.isNotEmpty()) {
+                    pump(g)
+                    return@post
+                }
+                finishAnnounce(g)
             }
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            synchronized(gate) { gattBusy = false }
-            pumpWrites(g)
+            onWriteDone(g, status)
+        }
+
+        private fun onWriteDone(g: BluetoothGatt, status: Int) {
+            val chunk = synchronized(gate) {
+                if (!gattBusy) return
+                gattBusy = false
+                val sent = inflight
+                inflight = null
+                sent
+            }
+            main.post {
+                if (gatt !== g) return@post
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    writeFails++
+                    if (chunk != null && writeFails < 5) {
+                        synchronized(gate) { outQueue.addFirst(chunk) }
+                        main.postDelayed({ if (gatt === g) pumpWrites(g) }, 40)
+                        return@post
+                    }
+                    writeFails = 0
+                } else {
+                    writeFails = 0
+                }
+                pumpWrites(g)
+            }
         }
 
         override fun onCharacteristicChanged(
@@ -162,11 +210,14 @@ class BleSession(
 
         @Deprecated("Deprecated in Java")
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            if (Build.VERSION.SDK_INT >= 33) return
             onNotify(characteristic, characteristic.value ?: return)
         }
 
         private fun onNotify(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastNotifyMs < 40 && value.contentEquals(lastNotify)) return
+            lastNotifyMs = now
+            lastNotify = value.copyOf()
             if (characteristic.uuid == Gatt.dataNotify) {
                 try {
                     val (_, frames) = Codec.decodeBatch(value)
@@ -278,7 +329,7 @@ class BleSession(
             }
             gatt
         }
-        if (g != null) pumpWrites(g)
+        if (g != null) onMain(g, ::pumpWrites)
     }
 
     @SuppressLint("MissingPermission")
@@ -290,6 +341,7 @@ class BleSession(
             val w = writeChar ?: return
             val queued = outQueue.removeFirstOrNull() ?: return
             gattBusy = true
+            inflight = queued
             ch = w
             next = queued
         }
@@ -308,13 +360,30 @@ class BleSession(
         writeFails++
         synchronized(gate) {
             gattBusy = false
+            inflight = null
             if (writeFails < 5) outQueue.addFirst(next)
         }
         if (writeFails < 5) {
             main.postDelayed({ if (gatt === g) pumpWrites(g) }, 40)
         } else {
             writeFails = 0
-            pumpWrites(g)
+            onMain(g, ::pumpWrites)
+        }
+    }
+
+    private fun finishAnnounce(g: BluetoothGatt) {
+        if (announced) return
+        announced = true
+        post("ready")
+        send("""{"op":"hello"}""")
+        send("""{"op":"status"}""")
+    }
+
+    private fun onMain(g: BluetoothGatt, block: (BluetoothGatt) -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            if (gatt === g) block(g)
+        } else {
+            main.post { if (gatt === g) block(g) }
         }
     }
 
@@ -333,20 +402,42 @@ class BleSession(
         }
         g.setCharacteristicNotification(ch, true)
         val desc = ch.getDescriptor(cccd) ?: return
-        desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-        descQueue.add(desc)
+        synchronized(gate) { descQueue.add(desc) }
         pump(g)
     }
 
     @SuppressLint("MissingPermission")
     private fun pump(g: BluetoothGatt) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { if (gatt === g) pump(g) }
+            return
+        }
         val desc = synchronized(gate) {
             if (gattBusy) return
             val next = descQueue.removeFirstOrNull() ?: return
             gattBusy = true
             next
         }
-        g.writeDescriptor(desc)
+        // API 33 drops the deprecated write and never calls back, so Files stays empty.
+        val value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+        val wrote = if (Build.VERSION.SDK_INT >= 33) {
+            g.writeDescriptor(desc, value) == BluetoothStatusCodes.SUCCESS
+        } else {
+            desc.value = value
+            g.writeDescriptor(desc)
+        }
+        if (wrote) return
+        descFails++
+        synchronized(gate) {
+            gattBusy = false
+            if (descFails < 5) descQueue.addFirst(desc)
+        }
+        if (descFails < 5) {
+            main.postDelayed({ if (gatt === g) pump(g) }, 40)
+        } else {
+            descFails = 0
+            post("notify failed")
+        }
     }
 
     private fun post(text: String) {

@@ -18,8 +18,8 @@ android {
         applicationId = "app.cango"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.1.10"
+        versionCode = 12
+        versionName = "0.1.11"
     }
     signingConfigs {
         if (keystorePropertiesFile.exists()) {
@@ -42,7 +42,10 @@ android {
             }
         }
     }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
