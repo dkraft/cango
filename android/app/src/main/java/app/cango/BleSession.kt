@@ -25,10 +25,12 @@ import java.util.UUID
  * Data notifications are CANGO batches. Log files are not transferred here.
  *
  * Android allows one GATT operation at a time, and it drops a notification
- * that arrives while a write is still outstanding. Setup is MTU, then each
- * notification enable. Each command is one or more writes with response,
- * then a wait until the matching JSON line arrives. The board sends that
- * line in 20-byte notifications so older Android builds do not truncate it.
+ * that arrives while a write is still outstanding. Setup is service
+ * discovery, then each notification enable. MTU is not requested: a stuck
+ * requestMtu blocks every later callback, the icon stays grey, and the file
+ * list is never sent. Commands wait until notifications are on, then one
+ * write-with-response at a time, then the matching JSON line. The board
+ * sends that line in 20-byte notifications.
  */
 class BleSession(
     context: Context,
@@ -62,9 +64,10 @@ class BleSession(
     /** Reply op the phone is waiting for. No write runs while this is set. */
     private var awaitOp: String? = null
     private var awaitGen = 0
+    /** Commands asked for before notifications are enabled. */
+    private val parked = ArrayDeque<String>()
 
     private sealed class Op {
-        data object Mtu : Op()
         class Notify(val ch: BluetoothGattCharacteristic) : Op()
         class Write(val data: ByteArray) : Op()
         class Barrier(val expect: String) : Op()
@@ -86,13 +89,8 @@ class BleSession(
                 gatt = g
                 fallbackScan = false
                 post("connected")
-                main.post {
-                    if (gatt !== g) return@post
-                    g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                    main.postDelayed({
-                        if (gatt === g) g.discoverServices()
-                    }, 200)
-                }
+                // On the callback gatt, before connectGatt's return value can replace it.
+                g.discoverServices()
                 return
             }
             if (newState == BluetoothGatt.STATE_DISCONNECTED) {
@@ -107,6 +105,7 @@ class BleSession(
                 activeTries = 0
                 awaitOp = null
                 awaitGen++
+                parked.clear()
                 ops.clear()
                 writeChar = null
                 payMax = 20
@@ -122,6 +121,7 @@ class BleSession(
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            gatt = g
             main.post {
                 if (gatt !== g) return@post
                 if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -141,21 +141,16 @@ class BleSession(
                 }
                 writeChar = write
                 arming = true
-                setupLeft = 3
-                enqueue(Op.Mtu)
+                setupLeft = 2
                 enqueue(Op.Notify(ctrl))
                 enqueue(Op.Notify(data))
             }
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            if (gatt !== g) return
             if (status == BluetoothGatt.GATT_SUCCESS && mtu >= 23) {
                 payMax = (mtu - 3).coerceIn(20, 512)
-            }
-            val seen = epoch
-            main.post {
-                if (gatt !== g || seen != epoch || active !is Op.Mtu) return@post
-                succeed()
             }
         }
 
@@ -291,7 +286,7 @@ class BleSession(
             writeChar = null
             post("connecting")
             val opened = device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            gatt = opened
+            if (gatt == null) gatt = opened
             if (opened == null) {
                 synchronized(gate) { opening = false }
                 post("connect failed")
@@ -310,20 +305,30 @@ class BleSession(
 
     fun send(json: String) {
         val payload = if (json.endsWith("\n")) json else json + "\n"
-        val bytes = payload.toByteArray(Charsets.UTF_8)
-        val expect = expectOp(jsonOp(payload))
         main.post {
-            if (gatt == null || writeChar == null || expect.isEmpty()) return@post
-            val max = payMax.coerceIn(20, 512)
-            var off = 0
-            while (off < bytes.size) {
-                val n = minOf(max, bytes.size - off)
-                ops.addLast(Op.Write(bytes.copyOfRange(off, off + n)))
-                off += n
+            if (gatt == null) return@post
+            if (!announced || writeChar == null) {
+                if (parked.size >= 16) parked.removeFirst()
+                parked.addLast(payload)
+                return@post
             }
-            ops.addLast(Op.Barrier(expect))
-            kick()
+            enqueueCommand(payload)
         }
+    }
+
+    private fun enqueueCommand(payload: String) {
+        val expect = expectOp(jsonOp(payload))
+        if (expect.isEmpty() || gatt == null || writeChar == null) return
+        val bytes = payload.toByteArray(Charsets.UTF_8)
+        val max = payMax.coerceIn(20, 512)
+        var off = 0
+        while (off < bytes.size) {
+            val n = minOf(max, bytes.size - off)
+            ops.addLast(Op.Write(bytes.copyOfRange(off, off + n)))
+            off += n
+        }
+        ops.addLast(Op.Barrier(expect))
+        kick()
     }
 
     private fun jsonOp(line: String): String {
@@ -370,7 +375,6 @@ class BleSession(
         val g = gatt ?: return
         val gen = ++epoch
         val started = when (op) {
-            Op.Mtu -> g.requestMtu(247)
             is Op.Notify -> enableNotify(g, op.ch)
             is Op.Write -> writeCtrl(g, op.data)
             is Op.Barrier -> false
@@ -411,16 +415,6 @@ class BleSession(
         active = null
         activeTries = 0
         when (op) {
-            Op.Mtu -> {
-                if (arming) {
-                    setupLeft--
-                    if (setupLeft == 0) {
-                        arming = false
-                        finishAnnounce()
-                    }
-                }
-                kick()
-            }
             is Op.Notify -> {
                 ops.clear()
                 arming = false
@@ -462,8 +456,12 @@ class BleSession(
         if (announced) return
         announced = true
         post("ready")
-        send("""{"op":"hello"}""")
-        send("""{"op":"status"}""")
+        val held = parked.toList()
+        parked.clear()
+        for (payload in held) enqueueCommand(payload)
+        enqueueCommand("{\"op\":\"hello\"}\n")
+        enqueueCommand("{\"op\":\"status\"}\n")
+        enqueueCommand("{\"op\":\"list_dir\",\"path\":\"\",\"skip\":0}\n")
     }
 
     @SuppressLint("MissingPermission")
@@ -473,6 +471,7 @@ class BleSession(
         epoch++
         awaitGen++
         awaitOp = null
+        parked.clear()
         ops.clear()
         active = null
         gatt?.close()

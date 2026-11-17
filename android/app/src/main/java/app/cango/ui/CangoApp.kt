@@ -264,6 +264,7 @@ fun CangoApp() {
                     }
                     text == "connected" -> {
                         mode = "ble"
+                        linked = true
                     }
                     text.startsWith("disconnected") || text.startsWith("discover failed") || text == "service missing" || text == "notify failed" -> {
                         linked = false
